@@ -1,4 +1,5 @@
 
+VERSION=0.1
 LIBS=-lmosquitto
 CFLAGS ?= -g -Wall -Werror
 
