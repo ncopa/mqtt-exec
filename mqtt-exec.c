@@ -92,7 +92,6 @@ int main(int argc, char *argv[])
 	memset(id, 0, sizeof(id));
 
 	while ((c = getopt_long(argc, argv, "dh:k:p:t:", opts, &i)) != -1) {
-		printf("DEBUG: %x\n",c);
 		switch(c) {
 		case 'd':
 			debug = 1;
