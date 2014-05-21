@@ -62,6 +62,18 @@ int usage(int retcode)
 "libmosquitto version: %d.%d.%d\n"
 "\n"
 "usage: mqtt-exec [ARGS...] -t TOPIC ... -- CMD [CMD ARGS...]\n"
+"\n"
+"options:\n"
+" -d,--debug          Enable debugging\n"
+" -h,--host HOST      Connect to HOST. Default is localhost\n"
+" -k,--keepalive SEC  Set keepalive to SEC. Default is 60\n"
+" -p,--port PORT      Set TCP port to PORT. Default is 1883\n"
+" -t,--topic TOPIC    Set MQTT topic to TOPIC. May be repeated\n"
+" -v,--verbose        Pass over the topic to application as firs arg\n"
+" --will-topic TOPIC  Set the client Will topic to TOPIC\n"
+" --will-payload MSG  Set the client Will message to MSG\n"
+" --will-qos QOS      Set the QoS level for client Will message\n"
+" --will-retain       Make the client Will retained\n"
 		"\n", major, minor, rev);
 	return retcode;
 }
