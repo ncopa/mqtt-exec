@@ -81,17 +81,26 @@ int main(int argc, char *argv[])
 		{"port",	required_argument,	0, 'p' },
 		{"topic",	required_argument,	0, 't' },
 		{"verbose",	no_argument,		0, 'v' },
+		{"will-topic",	required_argument,	0, 0x1001 },
+		{"will-payload", required_argument,	0, 0x1002 },
+		{"will-qos",	required_argument,	0, 0x1003 },
+		{"will-retain",	no_argument,		0, 0x1004 },
 		{ 0, 0, 0, 0}
 	};
 	int debug = 0;
 	const char *host = "localhost";
 	int port = 1883;
 	int keepalive = 60;
-	int i, c, rc;
+	int i, c, rc = 1;
 	struct userdata ud;
 	char hostname[256];
 	static char id[MOSQ_MQTT_ID_MAX_LENGTH+1];
 	struct mosquitto *mosq = NULL;
+
+	char *will_payload = NULL;
+	int will_qos = 0;
+	bool will_retain = false;
+	char *will_topic = NULL;
 
 	memset(&ud, 0, sizeof(ud));
 
@@ -120,6 +129,22 @@ int main(int argc, char *argv[])
 			break;
 		case 'v':
 			ud.verbose = 1;
+			break;
+		case 0x1001:
+			will_topic = optarg;
+			break;
+		case 0x1002:
+			will_payload = optarg;
+			break;
+		case 0x1003:
+			will_qos = atoi(optarg);
+			if (will_qos < 0 || will_qos > 2) {
+				fprintf(stderr, "%s: will QoS out of range\n", argv[0]);
+				return 1;
+			}
+			break;
+		case 0x1004:
+			will_retain = 1;
 			break;
 		case '?':
 			return usage(1);
@@ -151,6 +176,16 @@ int main(int argc, char *argv[])
 			host, port, id, ud.topic_count, ud.command_argv[0]);
 		mosquitto_log_callback_set(mosq, log_cb);
 	}
+
+	if (will_topic && mosquitto_will_set(mosq, will_topic,
+					     will_payload ? strlen(will_payload) : 0,
+					     will_payload, will_qos,
+					     will_retain)) {
+		fprintf(stderr, "Failed to set will\n");
+		goto cleanup;
+	}
+
+
 	mosquitto_connect_callback_set(mosq, connect_cb);
 	mosquitto_message_callback_set(mosq, message_cb);
 
@@ -162,11 +197,12 @@ int main(int argc, char *argv[])
 		if (rc == MOSQ_ERR_ERRNO)
 			return perror_ret("mosquitto_connect_bind");
 		fprintf(stderr, "Unable to connect (%d)\n", rc);
-		return 1;
+		goto cleanup;
 	}
 
 	rc = mosquitto_loop_forever(mosq, -1, 1);
 
+cleanup:
 	mosquitto_destroy(mosq);
 	mosquitto_lib_cleanup();
 	return rc;
