@@ -10,7 +10,8 @@
 #include <mosquitto.h>
 
 struct userdata {
-	char *topic;
+	char **topics;
+	size_t topic_count;
 	int command_argc;
 	int verbose;
 	char **command_argv;
@@ -43,7 +44,9 @@ void connect_cb(struct mosquitto *mosq, void *obj, int result)
 	struct userdata *ud = (struct userdata *)obj;
 	fflush(stderr);
 	if (result == 0) {
-		mosquitto_subscribe(mosq, NULL, ud->topic, 0);
+		size_t i;
+		for (i = 0; i < ud->topic_count; i++)
+			mosquitto_subscribe(mosq, NULL, ud->topics[i], 0);
 	} else {
 		fprintf(stderr, "%s\n", mosquitto_connack_string(result));
 	}
@@ -58,7 +61,7 @@ int usage(int retcode)
 "mqtt-exec - execute command on mqtt messages\n"
 "libmosquitto version: %d.%d.%d\n"
 "\n"
-"usage: mqtt-exec -t TOPIC [ARGS...] -- CMD [CMD ARGS...]\n"
+"usage: mqtt-exec [ARGS...] -t TOPIC ... -- CMD [CMD ARGS...]\n"
 		"\n", major, minor, rev);
 	return retcode;
 }
@@ -110,7 +113,10 @@ int main(int argc, char *argv[])
 			port = atoi(optarg);
 			break;
 		case 't':
-			ud.topic = optarg;
+			ud.topic_count++;
+			ud.topics = realloc(ud.topics,
+					    sizeof(char *) * ud.topic_count);
+			ud.topics[ud.topic_count-1] = optarg;
 			break;
 		case 'v':
 			ud.verbose = 1;
@@ -120,7 +126,7 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	if ((ud.topic == NULL) || (optind == argc))
+	if ((ud.topics == NULL) || (optind == argc))
 		return usage(1);
 
 	ud.command_argc = (argc - optind) + 1 + ud.verbose;
@@ -141,8 +147,8 @@ int main(int argc, char *argv[])
 		return perror_ret("mosquitto_new");
 
 	if (debug) {
-		printf("host=%s:%d\nid=%s\ntopic=%s\ncommand=%s\n",
-			host, port, id, ud.topic, ud.command_argv[0]);
+		printf("host=%s:%d\nid=%s\ntopic_count=%zu\ncommand=%s\n",
+			host, port, id, ud.topic_count, ud.command_argv[0]);
 		mosquitto_log_callback_set(mosq, log_cb);
 	}
 	mosquitto_connect_callback_set(mosq, connect_cb);
