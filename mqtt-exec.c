@@ -15,6 +15,7 @@ struct userdata {
 	int command_argc;
 	int verbose;
 	char **command_argv;
+	int qos;
 };
 
 void log_cb(struct mosquitto *mosq, void *obj, int level, const char *str)
@@ -46,7 +47,7 @@ void connect_cb(struct mosquitto *mosq, void *obj, int result)
 	if (result == 0) {
 		size_t i;
 		for (i = 0; i < ud->topic_count; i++)
-			mosquitto_subscribe(mosq, NULL, ud->topics[i], 0);
+			mosquitto_subscribe(mosq, NULL, ud->topics[i], ud->qos);
 	} else {
 		fprintf(stderr, "%s\n", mosquitto_connack_string(result));
 	}
@@ -68,6 +69,7 @@ int usage(int retcode)
 " -h,--host HOST      Connect to HOST. Default is localhost\n"
 " -k,--keepalive SEC  Set keepalive to SEC. Default is 60\n"
 " -p,--port PORT      Set TCP port to PORT. Default is 1883\n"
+" -q,--qos QOS        Set Quality of Serive to level. Default is 0\n"
 " -t,--topic TOPIC    Set MQTT topic to TOPIC. May be repeated\n"
 " -v,--verbose        Pass over the topic to application as firs arg\n"
 " --will-topic TOPIC  Set the client Will topic to TOPIC\n"
@@ -84,6 +86,15 @@ static int perror_ret(const char *msg)
 	return 1;
 }
 
+static int valid_qos_range(int qos, const char *type)
+{
+	if (qos >= 0 && qos <= 2)
+		return 1;
+
+	fprintf(stderr, "%d: %s out of range\n", qos, type);
+	return 0;
+}
+
 int main(int argc, char *argv[])
 {
 	static struct option opts[] = {
@@ -91,6 +102,7 @@ int main(int argc, char *argv[])
 		{"host",	required_argument,	0, 'h' },
 		{"keepalive",	required_argument,	0, 'k' },
 		{"port",	required_argument,	0, 'p' },
+		{"qos",		required_argument,	0, 'q' },
 		{"topic",	required_argument,	0, 't' },
 		{"verbose",	no_argument,		0, 'v' },
 		{"will-topic",	required_argument,	0, 0x1001 },
@@ -119,7 +131,7 @@ int main(int argc, char *argv[])
 	memset(hostname, 0, sizeof(hostname));
 	memset(id, 0, sizeof(id));
 
-	while ((c = getopt_long(argc, argv, "dh:k:p:t:v", opts, &i)) != -1) {
+	while ((c = getopt_long(argc, argv, "dh:k:p:q:t:v", opts, &i)) != -1) {
 		switch(c) {
 		case 'd':
 			debug = 1;
@@ -132,6 +144,11 @@ int main(int argc, char *argv[])
 			break;
 		case 'p':
 			port = atoi(optarg);
+			break;
+		case 'q':
+			ud.qos = atoi(optarg);
+			if (!valid_qos_range(ud.qos, "QoS"))
+				return 1;
 			break;
 		case 't':
 			ud.topic_count++;
@@ -150,10 +167,8 @@ int main(int argc, char *argv[])
 			break;
 		case 0x1003:
 			will_qos = atoi(optarg);
-			if (will_qos < 0 || will_qos > 2) {
-				fprintf(stderr, "%s: will QoS out of range\n", argv[0]);
+			if (!valid_qos_range(will_qos, "will QoS"))
 				return 1;
-			}
 			break;
 		case 0x1004:
 			will_retain = 1;
