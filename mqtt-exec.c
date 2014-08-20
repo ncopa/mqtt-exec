@@ -65,17 +65,18 @@ int usage(int retcode)
 "usage: mqtt-exec [ARGS...] -t TOPIC ... -- CMD [CMD ARGS...]\n"
 "\n"
 "options:\n"
-" -d,--debug          Enable debugging\n"
-" -h,--host HOST      Connect to HOST. Default is localhost\n"
-" -k,--keepalive SEC  Set keepalive to SEC. Default is 60\n"
-" -p,--port PORT      Set TCP port to PORT. Default is 1883\n"
-" -q,--qos QOS        Set Quality of Serive to level. Default is 0\n"
-" -t,--topic TOPIC    Set MQTT topic to TOPIC. May be repeated\n"
-" -v,--verbose        Pass over the topic to application as firs arg\n"
-" --will-topic TOPIC  Set the client Will topic to TOPIC\n"
-" --will-payload MSG  Set the client Will message to MSG\n"
-" --will-qos QOS      Set the QoS level for client Will message\n"
-" --will-retain       Make the client Will retained\n"
+" -c,--disable-clean-session  Disable the 'clean session' flag\n"
+" -d,--debug                  Enable debugging\n"
+" -h,--host HOST              Connect to HOST. Default is localhost\n"
+" -k,--keepalive SEC          Set keepalive to SEC. Default is 60\n"
+" -p,--port PORT              Set TCP port to PORT. Default is 1883\n"
+" -q,--qos QOS                Set Quality of Serive to level. Default is 0\n"
+" -t,--topic TOPIC            Set MQTT topic to TOPIC. May be repeated\n"
+" -v,--verbose                Pass over the topic to application as firs arg\n"
+" --will-topic TOPIC          Set the client Will topic to TOPIC\n"
+" --will-payload MSG          Set the client Will message to MSG\n"
+" --will-qos QOS              Set the QoS level for client Will message\n"
+" --will-retain               Make the client Will retained\n"
 		"\n", major, minor, rev);
 	return retcode;
 }
@@ -98,6 +99,7 @@ static int valid_qos_range(int qos, const char *type)
 int main(int argc, char *argv[])
 {
 	static struct option opts[] = {
+		{"disable-clean-session", no_argument,	0, 'c' },
 		{"debug",	no_argument,		0, 'd' },
 		{"host",	required_argument,	0, 'h' },
 		{"keepalive",	required_argument,	0, 'k' },
@@ -112,6 +114,7 @@ int main(int argc, char *argv[])
 		{ 0, 0, 0, 0}
 	};
 	int debug = 0;
+	bool clean_session = true;
 	const char *host = "localhost";
 	int port = 1883;
 	int keepalive = 60;
@@ -131,8 +134,11 @@ int main(int argc, char *argv[])
 	memset(hostname, 0, sizeof(hostname));
 	memset(id, 0, sizeof(id));
 
-	while ((c = getopt_long(argc, argv, "dh:k:p:q:t:v", opts, &i)) != -1) {
+	while ((c = getopt_long(argc, argv, "cdh:k:p:q:t:v", opts, &i)) != -1) {
 		switch(c) {
+		case 'c':
+			clean_session = false;
+			break;
 		case 'd':
 			debug = 1;
 			break;
@@ -194,7 +200,7 @@ int main(int argc, char *argv[])
 	snprintf(id, sizeof(id), "mqttexe/%x-%s", getpid(), hostname);
 
 	mosquitto_lib_init();
-	mosq = mosquitto_new(id, true, &ud);
+	mosq = mosquitto_new(id, clean_session, &ud);
 	if (mosq == NULL)
 		return perror_ret("mosquitto_new");
 
