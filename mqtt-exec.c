@@ -68,6 +68,7 @@ int usage(int retcode)
 " -c,--disable-clean-session  Disable the 'clean session' flag\n"
 " -d,--debug                  Enable debugging\n"
 " -h,--host HOST              Connect to HOST. Default is localhost\n"
+" -i,--id ID                  The id to use for this client\n"
 " -k,--keepalive SEC          Set keepalive to SEC. Default is 60\n"
 " -p,--port PORT              Set TCP port to PORT. Default is 1883\n"
 " -q,--qos QOS                Set Quality of Serive to level. Default is 0\n"
@@ -102,6 +103,7 @@ int main(int argc, char *argv[])
 		{"disable-clean-session", no_argument,	0, 'c' },
 		{"debug",	no_argument,		0, 'd' },
 		{"host",	required_argument,	0, 'h' },
+		{"id",		required_argument,	0, 'i' },
 		{"keepalive",	required_argument,	0, 'k' },
 		{"port",	required_argument,	0, 'p' },
 		{"qos",		required_argument,	0, 'q' },
@@ -134,7 +136,7 @@ int main(int argc, char *argv[])
 	memset(hostname, 0, sizeof(hostname));
 	memset(id, 0, sizeof(id));
 
-	while ((c = getopt_long(argc, argv, "cdh:k:p:q:t:v", opts, &i)) != -1) {
+	while ((c = getopt_long(argc, argv, "cdh:i:k:p:q:t:v", opts, &i)) != -1) {
 		switch(c) {
 		case 'c':
 			clean_session = false;
@@ -144,6 +146,14 @@ int main(int argc, char *argv[])
 			break;
 		case 'h':
 			host = optarg;
+			break;
+		case 'i':
+			if (strlen(optarg) > MOSQ_MQTT_ID_MAX_LENGTH) {
+				fprintf(stderr, "specified id is longer than %d chars\n",
+					MOSQ_MQTT_ID_MAX_LENGTH);
+				return 1;
+			}
+			strncpy(id, optarg, sizeof(id)-1);
 			break;
 		case 'k':
 			keepalive = atoi(optarg);
@@ -195,9 +205,11 @@ int main(int argc, char *argv[])
 	for (i=0; i <= ud.command_argc; i++)
 		ud.command_argv[i] = optind+i < argc ? argv[optind+i] : NULL;
 
-	/* generate an id */
-	gethostname(hostname, sizeof(hostname)-1);
-	snprintf(id, sizeof(id), "mqttexe/%x-%s", getpid(), hostname);
+	if (id[0] == '\0') {
+		/* generate an id */
+		gethostname(hostname, sizeof(hostname)-1);
+		snprintf(id, sizeof(id), "mqttexe/%x-%s", getpid(), hostname);
+	}
 
 	mosquitto_lib_init();
 	mosq = mosquitto_new(id, clean_session, &ud);
