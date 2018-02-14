@@ -78,6 +78,12 @@ int usage(int retcode)
 " --will-payload MSG          Set the client Will message to MSG\n"
 " --will-qos QOS              Set the QoS level for client Will message\n"
 " --will-retain               Make the client Will retained\n"
+#ifdef WITH_TLS
+" --cafile FILE               Path to file containing CA certificates\n"
+" --capath DIR                Path to directory containing CA certificates\n"
+" --cert FILE                 Client certificate for authentication\n"
+" --key FILE                  Client private key for authentication\n"
+#endif
 		"\n", major, minor, rev);
 	return retcode;
 }
@@ -113,6 +119,12 @@ int main(int argc, char *argv[])
 		{"will-payload", required_argument,	0, 0x1002 },
 		{"will-qos",	required_argument,	0, 0x1003 },
 		{"will-retain",	no_argument,		0, 0x1004 },
+#ifdef WITH_TLS
+		{"cafile",	required_argument,	0, 0x2001 },
+		{"capath",	required_argument,	0, 0x2002 },
+		{"cert",	required_argument,	0, 0x2003 },
+		{"key",		required_argument,	0, 0x2004 },
+#endif
 		{ 0, 0, 0, 0}
 	};
 	int debug = 0;
@@ -130,6 +142,12 @@ int main(int argc, char *argv[])
 	int will_qos = 0;
 	bool will_retain = false;
 	char *will_topic = NULL;
+#ifdef WITH_TLS
+	char *cafile = NULL;
+	char *capath = NULL;
+	char *certfile = NULL;
+	char *keyfile = NULL;
+#endif
 
 	memset(&ud, 0, sizeof(ud));
 
@@ -189,6 +207,20 @@ int main(int argc, char *argv[])
 		case 0x1004:
 			will_retain = 1;
 			break;
+#ifdef WITH_TLS
+		case 0x2001:
+			cafile = optarg;
+			break;
+		case 0x2002:
+			capath = optarg;
+			break;
+		case 0x2003:
+			certfile = optarg;
+			break;
+		case 0x2004:
+			keyfile = optarg;
+			break;
+#endif
 		case '?':
 			return usage(1);
 		}
@@ -230,6 +262,13 @@ int main(int argc, char *argv[])
 		goto cleanup;
 	}
 
+#ifdef WITH_TLS
+	if ((cafile || capath) && mosquitto_tls_set(mosq, cafile, capath, certfile,
+						    keyfile, NULL)) {
+		fprintf(stderr, "Failed to set TLS options\n");
+		goto cleanup;
+	}
+#endif
 
 	mosquitto_connect_callback_set(mosq, connect_cb);
 	mosquitto_message_callback_set(mosq, message_cb);
