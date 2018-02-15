@@ -83,6 +83,8 @@ int usage(int retcode)
 " --capath DIR                Path to directory containing CA certificates\n"
 " --cert FILE                 Client certificate for authentication\n"
 " --key FILE                  Client private key for authentication\n"
+" --ciphers LIST              OpenSSL compatible list of TLS ciphers\n"
+" --tls-version VERSION       TLS protocol version: tlsv1.2 tlsv1.1 tlsv1\n"
 #endif
 		"\n", major, minor, rev);
 	return retcode;
@@ -124,6 +126,8 @@ int main(int argc, char *argv[])
 		{"capath",	required_argument,	0, 0x2002 },
 		{"cert",	required_argument,	0, 0x2003 },
 		{"key",		required_argument,	0, 0x2004 },
+		{"ciphers",	required_argument,	0, 0x2005 },
+		{"tls-version",	required_argument,	0, 0x2006 },
 #endif
 		{ 0, 0, 0, 0}
 	};
@@ -147,6 +151,8 @@ int main(int argc, char *argv[])
 	char *capath = NULL;
 	char *certfile = NULL;
 	char *keyfile = NULL;
+	char *ciphers = NULL;
+	char *tls_version = NULL;
 #endif
 
 	memset(&ud, 0, sizeof(ud));
@@ -220,6 +226,12 @@ int main(int argc, char *argv[])
 		case 0x2004:
 			keyfile = optarg;
 			break;
+		case 0x2005:
+			ciphers = optarg;
+			break;
+		case 0x2006:
+			tls_version = optarg;
+			break;
 #endif
 		case '?':
 			return usage(1);
@@ -265,6 +277,11 @@ int main(int argc, char *argv[])
 #ifdef WITH_TLS
 	if ((cafile || capath) && mosquitto_tls_set(mosq, cafile, capath, certfile,
 						    keyfile, NULL)) {
+		fprintf(stderr, "Failed to set TLS options\n");
+		goto cleanup;
+	}
+	if ((tls_version || ciphers) && mosquitto_tls_opts_set(mosq, 1, tls_version,
+							       ciphers)) {
 		fprintf(stderr, "Failed to set TLS options\n");
 		goto cleanup;
 	}
