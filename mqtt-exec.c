@@ -85,6 +85,8 @@ int usage(int retcode)
 " --key FILE                  Client private key for authentication\n"
 " --ciphers LIST              OpenSSL compatible list of TLS ciphers\n"
 " --tls-version VERSION       TLS protocol version: tlsv1.2 tlsv1.1 tlsv1\n"
+" --psk KEY                   pre-shared-key in hexadecimal (no leading 0x)\n"
+" --psk-identity STRING       client identity string for TLS-PSK mode\n"
 #endif
 		"\n", major, minor, rev);
 	return retcode;
@@ -128,6 +130,8 @@ int main(int argc, char *argv[])
 		{"key",		required_argument,	0, 0x2004 },
 		{"ciphers",	required_argument,	0, 0x2005 },
 		{"tls-version",	required_argument,	0, 0x2006 },
+		{"psk",		required_argument,	0, 0x2007 },
+		{"psk-identity",required_argument,	0, 0x2008 },
 #endif
 		{ 0, 0, 0, 0}
 	};
@@ -153,6 +157,8 @@ int main(int argc, char *argv[])
 	char *keyfile = NULL;
 	char *ciphers = NULL;
 	char *tls_version = NULL;
+	char *psk = NULL;
+	char *psk_identity = NULL;
 #endif
 
 	memset(&ud, 0, sizeof(ud));
@@ -232,6 +238,12 @@ int main(int argc, char *argv[])
 		case 0x2006:
 			tls_version = optarg;
 			break;
+		case 0x2007:
+			psk = optarg;
+			break;
+		case 0x2008:
+			psk_identity = optarg;
+			break;
 #endif
 		case '?':
 			return usage(1);
@@ -278,6 +290,10 @@ int main(int argc, char *argv[])
 	if ((cafile || capath) && mosquitto_tls_set(mosq, cafile, capath, certfile,
 						    keyfile, NULL)) {
 		fprintf(stderr, "Failed to set TLS options\n");
+		goto cleanup;
+	}
+	if (psk && mosquitto_tls_psk_set(mosq, psk, psk_identity, NULL)) {
+		fprintf(stderr, "Failed to set TLS-PSK\n");
 		goto cleanup;
 	}
 	if ((tls_version || ciphers) && mosquitto_tls_opts_set(mosq, 1, tls_version,
