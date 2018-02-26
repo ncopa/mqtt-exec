@@ -1,5 +1,5 @@
 
-VERSION=0.3
+VERSION=0.4
 LIBS=-lmosquitto
 CFLAGS ?= -g -Wall -Werror
 WITH_TLS := 1
