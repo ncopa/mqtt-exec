@@ -18,6 +18,33 @@ struct userdata {
 	int qos;
 };
 
+struct configuration {
+	int debug;
+	bool clean_session;
+	const char *host;
+	char id[MOSQ_MQTT_ID_MAX_LENGTH+1];
+	int keepalive;
+	int port;
+	struct userdata ud;
+	char *username;
+	char *password;
+
+	char *will_payload;
+	int will_qos;
+	bool will_retain;
+	char *will_topic;
+	#ifdef WITH_TLS
+	char *cafile;
+	char *capath;
+	char *certfile;
+	char *keyfile;
+	char *ciphers;
+	char *tls_version;
+	char *psk;
+	char *psk_identity;
+	#endif
+};
+
 void log_cb(struct mosquitto *mosq, void *obj, int level, const char *str)
 {
 	printf("%s\n", str);
@@ -109,6 +136,14 @@ static int valid_qos_range(int qos, const char *type)
 	return 0;
 }
 
+void add_topic(struct configuration *conf, char *topic)
+{
+	conf->ud.topic_count++;
+	conf->ud.topics = realloc(conf->ud.topics,
+				sizeof(char *) * conf->ud.topic_count);
+	conf->ud.topics[conf->ud.topic_count-1] = topic;
+}
+
 int main(int argc, char *argv[])
 {
 	static struct option opts[] = {
@@ -139,49 +174,25 @@ int main(int argc, char *argv[])
 #endif
 		{ 0, 0, 0, 0}
 	};
-	int debug = 0;
-	bool clean_session = true;
-	const char *host = "localhost";
-	int port = 1883;
-	int keepalive = 60;
+	struct configuration conf;
 	int i, c, rc = 1;
-	struct userdata ud;
 	char hostname[256];
-	static char id[MOSQ_MQTT_ID_MAX_LENGTH+1];
 	struct mosquitto *mosq = NULL;
-	char *username = NULL;
-	char *password = NULL;
 
-	char *will_payload = NULL;
-	int will_qos = 0;
-	bool will_retain = false;
-	char *will_topic = NULL;
-#ifdef WITH_TLS
-	char *cafile = NULL;
-	char *capath = NULL;
-	char *certfile = NULL;
-	char *keyfile = NULL;
-	char *ciphers = NULL;
-	char *tls_version = NULL;
-	char *psk = NULL;
-	char *psk_identity = NULL;
-#endif
-
-	memset(&ud, 0, sizeof(ud));
-
+	memset(&conf, 0, sizeof(conf));
+	memset(&conf.ud, 0, sizeof(conf.ud));
 	memset(hostname, 0, sizeof(hostname));
-	memset(id, 0, sizeof(id));
 
 	while ((c = getopt_long(argc, argv, "cdh:i:k:p:P:q:t:u:v", opts, &i)) != -1) {
 		switch(c) {
 		case 'c':
-			clean_session = false;
+			conf.clean_session = false;
 			break;
 		case 'd':
-			debug = 1;
+			conf.debug = 1;
 			break;
 		case 'h':
-			host = optarg;
+			conf.host = optarg;
 			break;
 		case 'i':
 			if (strlen(optarg) > MOSQ_MQTT_ID_MAX_LENGTH) {
@@ -189,70 +200,67 @@ int main(int argc, char *argv[])
 					MOSQ_MQTT_ID_MAX_LENGTH);
 				return 1;
 			}
-			strncpy(id, optarg, sizeof(id)-1);
+			strncpy(conf.id, optarg, sizeof(conf.id)-1);
 			break;
 		case 'k':
-			keepalive = atoi(optarg);
+			conf.keepalive = atoi(optarg);
 			break;
 		case 'p':
-			port = atoi(optarg);
+			conf.port = atoi(optarg);
 			break;
 		case 'P':
-			password = optarg;
+			conf.password = optarg;
 		case 'q':
-			ud.qos = atoi(optarg);
-			if (!valid_qos_range(ud.qos, "QoS"))
+			conf.ud.qos = atoi(optarg);
+			if (!valid_qos_range(conf.ud.qos, "QoS"))
 				return 1;
 			break;
 		case 't':
-			ud.topic_count++;
-			ud.topics = realloc(ud.topics,
-					    sizeof(char *) * ud.topic_count);
-			ud.topics[ud.topic_count-1] = optarg;
+			add_topic(&conf, optarg);
 			break;
 		case 'u':
-			username = optarg;
+			conf.username = optarg;
 		case 'v':
-			ud.verbose = 1;
+			conf.ud.verbose = 1;
 			break;
 		case 0x1001:
-			will_topic = optarg;
+			conf.will_topic = optarg;
 			break;
 		case 0x1002:
-			will_payload = optarg;
+			conf.will_payload = optarg;
 			break;
 		case 0x1003:
-			will_qos = atoi(optarg);
-			if (!valid_qos_range(will_qos, "will QoS"))
+			conf.will_qos = atoi(optarg);
+			if (!valid_qos_range(conf.will_qos, "will QoS"))
 				return 1;
 			break;
 		case 0x1004:
-			will_retain = 1;
+			conf.will_retain = 1;
 			break;
 #ifdef WITH_TLS
 		case 0x2001:
-			cafile = optarg;
+			conf.cafile = optarg;
 			break;
 		case 0x2002:
-			capath = optarg;
+			conf.capath = optarg;
 			break;
 		case 0x2003:
-			certfile = optarg;
+			conf.certfile = optarg;
 			break;
 		case 0x2004:
-			keyfile = optarg;
+			conf.keyfile = optarg;
 			break;
 		case 0x2005:
-			ciphers = optarg;
+			conf.ciphers = optarg;
 			break;
 		case 0x2006:
-			tls_version = optarg;
+			conf.tls_version = optarg;
 			break;
 		case 0x2007:
-			psk = optarg;
+			conf.psk = optarg;
 			break;
 		case 0x2008:
-			psk_identity = optarg;
+			conf.psk_identity = optarg;
 			break;
 #endif
 		case '?':
@@ -260,62 +268,72 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	if ((ud.topics == NULL) || (optind == argc))
+	if (!conf.port) {
+		conf.port = 1883;
+	}
+	if (!conf.keepalive) {
+		conf.keepalive = 60;
+	}
+	if (!conf.host) {
+		conf.host = "localhost";
+	}
+
+	if ((conf.ud.topics == NULL) || (optind == argc))
 		return usage(1);
 
-	ud.command_argc = (argc - optind) + 1 + ud.verbose;
-	ud.command_argv = malloc((ud.command_argc + 1) * sizeof(char *));
-	if (ud.command_argv == NULL)
+	conf.ud.command_argc = (argc - optind) + 1 + conf.ud.verbose;
+	conf.ud.command_argv = malloc((conf.ud.command_argc + 1) * sizeof(char *));
+	if (conf.ud.command_argv == NULL)
 		return perror_ret("malloc");
 
-	for (i=0; i <= ud.command_argc; i++)
-		ud.command_argv[i] = optind+i < argc ? argv[optind+i] : NULL;
+	for (i=0; i <= conf.ud.command_argc; i++)
+		conf.ud.command_argv[i] = optind+i < argc ? argv[optind+i] : NULL;
 
-	if (id[0] == '\0') {
+	if (conf.id[0] == '\0') {
 		/* generate an id */
 		gethostname(hostname, sizeof(hostname)-1);
-		snprintf(id, sizeof(id), "mqttexe/%x-%s", getpid(), hostname);
+		snprintf(conf.id, sizeof(conf.id), "mqttexe/%x-%s", getpid(), hostname);
 	}
 
 	mosquitto_lib_init();
-	mosq = mosquitto_new(id, clean_session, &ud);
+	mosq = mosquitto_new(conf.id, conf.clean_session, &conf.ud);
 	if (mosq == NULL)
 		return perror_ret("mosquitto_new");
 
-	if (debug) {
+	if (conf.debug) {
 		printf("host=%s:%d\nid=%s\ntopic_count=%zu\ncommand=%s\n",
-			host, port, id, ud.topic_count, ud.command_argv[0]);
+			conf.host, conf.port, conf.id, conf.ud.topic_count, conf.ud.command_argv[0]);
 		mosquitto_log_callback_set(mosq, log_cb);
 	}
 
-	if (will_topic && mosquitto_will_set(mosq, will_topic,
-					     will_payload ? strlen(will_payload) : 0,
-					     will_payload, will_qos,
-					     will_retain)) {
+	if (conf.will_topic && mosquitto_will_set(mosq, conf.will_topic,
+					     conf.will_payload ? strlen(conf.will_payload) : 0,
+					     conf.will_payload, conf.will_qos,
+					     conf.will_retain)) {
 		fprintf(stderr, "Failed to set will\n");
 		goto cleanup;
 	}
 
-	if (!username != !password) {
+	if (!conf.username != !conf.password) {
 		fprintf(stderr, "Need to set both username and password\n");
 		goto cleanup;
 	}
 
-	if (username && password)
-		mosquitto_username_pw_set(mosq, username, password);
+	if (conf.username && conf.password)
+		mosquitto_username_pw_set(mosq, conf.username, conf.password);
 
 #ifdef WITH_TLS
-	if ((cafile || capath) && mosquitto_tls_set(mosq, cafile, capath, certfile,
-						    keyfile, NULL)) {
+	if ((conf.cafile || conf.capath) && mosquitto_tls_set(mosq, conf.cafile, conf.capath, conf.certfile,
+						    conf.keyfile, NULL)) {
 		fprintf(stderr, "Failed to set TLS options\n");
 		goto cleanup;
 	}
-	if (psk && mosquitto_tls_psk_set(mosq, psk, psk_identity, NULL)) {
+	if (conf.psk && mosquitto_tls_psk_set(mosq, conf.psk, conf.psk_identity, NULL)) {
 		fprintf(stderr, "Failed to set TLS-PSK\n");
 		goto cleanup;
 	}
-	if ((tls_version || ciphers) && mosquitto_tls_opts_set(mosq, 1, tls_version,
-							       ciphers)) {
+	if ((conf.tls_version || conf.ciphers) && mosquitto_tls_opts_set(mosq, 1, conf.tls_version,
+							       conf.ciphers)) {
 		fprintf(stderr, "Failed to set TLS options\n");
 		goto cleanup;
 	}
@@ -327,7 +345,7 @@ int main(int argc, char *argv[])
 	/* let kernel reap the children */
 	signal(SIGCHLD, SIG_IGN);
 
-	rc = mosquitto_connect(mosq, host, port, keepalive);
+	rc = mosquitto_connect(mosq, conf.host, conf.port, conf.keepalive);
 	if (rc != MOSQ_ERR_SUCCESS) {
 		if (rc == MOSQ_ERR_ERRNO)
 			return perror_ret("mosquitto_connect_bind");
