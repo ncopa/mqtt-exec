@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <ctype.h>
 
 #include <mosquitto.h>
 
@@ -93,6 +94,7 @@ int usage(int retcode)
 "\n"
 "options:\n"
 " -c,--disable-clean-session  Disable the 'clean session' flag\n"
+" -C,--config                 Specify the configuration file\n"
 " -d,--debug                  Enable debugging\n"
 " -h,--host HOST              Connect to HOST. Default is localhost\n"
 " -i,--id ID                  The id to use for this client\n"
@@ -136,6 +138,78 @@ static int valid_qos_range(int qos, const char *type)
 	return 0;
 }
 
+#define LINE_SIZE 256
+#define LINE_BUFF_SIZE 16
+
+int read_file(const char *path, char** file_contents[])
+{
+	FILE *fd;
+	char line[LINE_SIZE];
+	int idx = 0;
+	size_t len = LINE_BUFF_SIZE;
+	size_t line_len = LINE_SIZE;
+	char** lines;
+
+	lines = malloc(len * sizeof(char *));
+
+	if (!lines) {
+		return perror_ret("malloc");
+	}
+
+	fd = fopen(path, "r");
+
+	if (!fd)
+		return perror_ret("fopen");
+
+	while(fgets(line, LINE_SIZE, fd)) {
+		lines[idx] = strndup(line, LINE_SIZE);
+
+		while (strstr(lines[idx], "\n") == NULL) {
+			if (!fgets(line, LINE_SIZE, fd))
+				break;
+
+			lines[idx] = realloc(lines[idx], (line_len + LINE_SIZE) * sizeof(char *));
+			if (!lines[idx])
+				return perror_ret("realloc");
+			strncpy(&lines[idx][line_len - 1], line, LINE_SIZE);
+			line_len += LINE_SIZE;
+		}
+
+		idx++;
+
+		if (idx >= len - 1) {
+			len += LINE_BUFF_SIZE;
+			if(!(lines = realloc(lines, len * sizeof(char*))))
+				return perror_ret("realloc");
+		}
+	}
+	line[idx] = '\0';
+
+	*file_contents = lines;
+
+	return 0;
+}
+
+char *trim(char *str)
+{
+	char *end;
+
+	// Trim leading space
+	while(isspace((unsigned char)*str)) str++;
+
+	if(*str == 0)	 // All spaces?
+		return str;
+
+	// Trim trailing space
+	end = str + strlen(str) - 1;
+	while(end > str && isspace((unsigned char)*end)) end--;
+
+	// Write new null terminator
+	*(end+1) = 0;
+
+	return str;
+}
+
 void add_topic(struct configuration *conf, char *topic)
 {
 	conf->ud.topic_count++;
@@ -144,10 +218,77 @@ void add_topic(struct configuration *conf, char *topic)
 	conf->ud.topics[conf->ud.topic_count-1] = topic;
 }
 
+void parse_config(char *config[], struct configuration *conf)
+{
+	char *line = NULL;
+	int idx = 0;
+	char *key, *value;
+
+	while((line = config[idx])) {
+		key = trim(strdup(strtok(line, "=")));
+		value = strtok(NULL, "#\n");
+		if (value)
+			value = trim(strdup(value));
+		if (key[0] == '#') { /* comment, ignoring line */ }
+		else if(!strcmp(key, "debug"))
+			conf->debug = 1;
+		else if(!strcmp(key, "verbose"))
+			conf->ud.verbose = 1;
+		else if(!conf->host && !strcmp(key, "host"))
+			conf->host = value;
+		else if(conf->id && !strcmp(key, "id"))
+			strncpy(conf->id, value, sizeof(conf->id)-1);
+		else if(!strcmp(key, "topic"))
+			add_topic(conf, value);
+		else if(!conf->keepalive && !strcmp(key, "keepalive"))
+			conf->keepalive = atoi(value);
+		else if(!conf->port && !strcmp(key, "port"))
+			conf->port = atoi(value);
+		else if(!conf->ud.qos && !strcmp(key, "qos"))
+			conf->ud.qos = atoi(value);
+		else if(!conf->username && !strcmp(key, "username"))
+			conf->username = value;
+		else if (!conf->password && !strcmp(key, "password"))
+			conf->password = value;
+		else if (!conf->will_payload && !strcmp(key, "will_payload"))
+			conf->will_payload = value;
+		else if (!conf->will_qos && !strcmp(key, "will_qos"))
+			conf->will_qos = atoi(value);
+		else if (!conf->will_retain && !strcmp(key, "will_retain"))
+			conf->will_retain = true;
+		else if (!conf->will_topic && !strcmp(key, "will_topic"))
+			conf->will_topic = value;
+		#ifdef WITH_TLS
+		else if (!conf->cafile && !strcmp(key, "cafile"))
+			conf->cafile = value;
+		else if (!conf->capath && !strcmp(key, "capath"))
+			conf->capath = value;
+		else if (!conf->certfile && !strcmp(key, "certfile"))
+			conf->certfile = value;
+		else if (!conf->keyfile && !strcmp(key, "keyfile"))
+			conf->keyfile = value;
+		else if (!conf->ciphers && !strcmp(key, "ciphers"))
+			conf->ciphers = value;
+		else if (!conf->tls_version && !strcmp(key, "tls_version"))
+			conf->tls_version = value;
+		else if (!conf->psk && !strcmp(key, "psk"))
+			conf->psk = value;
+		else if (!conf->psk_identity && !strcmp(key, "psk_identity"))
+			conf->psk_identity = value;
+		#endif
+		else {
+			fprintf(stderr, "Unknown config key '%s' on line %d\n", key, idx + 1);
+			exit(1);
+		}
+		idx++;
+	}
+}
+
 int main(int argc, char *argv[])
 {
 	static struct option opts[] = {
 		{"disable-clean-session", no_argument,	0, 'c' },
+		{"config",	required_argument,	0, 'C' },
 		{"debug",	no_argument,		0, 'd' },
 		{"host",	required_argument,	0, 'h' },
 		{"id",		required_argument,	0, 'i' },
@@ -174,7 +315,9 @@ int main(int argc, char *argv[])
 #endif
 		{ 0, 0, 0, 0}
 	};
+
 	struct configuration conf;
+	const char *config_file = "";
 	int i, c, rc = 1;
 	char hostname[256];
 	struct mosquitto *mosq = NULL;
@@ -183,10 +326,13 @@ int main(int argc, char *argv[])
 	memset(&conf.ud, 0, sizeof(conf.ud));
 	memset(hostname, 0, sizeof(hostname));
 
-	while ((c = getopt_long(argc, argv, "cdh:i:k:p:P:q:t:u:v", opts, &i)) != -1) {
+	while ((c = getopt_long(argc, argv, "cC:dh:i:k:p:P:q:t:u:v", opts, &i)) != -1) {
 		switch(c) {
 		case 'c':
 			conf.clean_session = false;
+			break;
+		case 'C':
+			config_file = optarg;
 			break;
 		case 'd':
 			conf.debug = 1;
@@ -265,6 +411,24 @@ int main(int argc, char *argv[])
 #endif
 		case '?':
 			return usage(1);
+		}
+	}
+
+	if (config_file) {
+		char **file_contents;
+		int ret;
+
+		if (*config_file) {
+			if (access(config_file, R_OK) <0) {
+				fprintf(stderr, "File not found or no access: %s\n", config_file);
+				goto cleanup;
+			}
+
+			ret = read_file(config_file, &file_contents);
+			if(ret)
+				goto cleanup;
+
+			parse_config(file_contents, &conf);
 		}
 	}
 
