@@ -296,6 +296,9 @@ int main(int argc, char *argv[])
 		goto cleanup;
 	}
 
+	if (username && !password)
+		password = getenv("MQTT_EXEC_PASSWORD");
+
 	if (!username != !password) {
 		fprintf(stderr, "Need to set both username and password\n");
 		goto cleanup;
