@@ -1,4 +1,9 @@
-
+/* Copyright (c) 2013-2019 Natanael Copa <ncopa@alpinelinux.org>
+ *
+ * This work is licensed under the terms of the MIT license.
+ * For a copy, see <https://opensource.org/licenses/MIT>.
+ *
+ */
 #include <err.h>
 #include <getopt.h>
 #include <signal.h>
