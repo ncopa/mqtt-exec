@@ -75,7 +75,7 @@ int usage(int retcode)
 " -q,--qos QOS                Set Quality of Serive to level. Default is 0\n"
 " -t,--topic TOPIC            Set MQTT topic to TOPIC. May be repeated\n"
 " -u,--username USERNAME      Set username for authentication\n"
-" -v,--verbose                Pass over the topic to application as firs arg\n"
+" -v,--verbose                Pass over the topic to application as first arg\n"
 " --will-topic TOPIC          Set the client Will topic to TOPIC\n"
 " --will-payload MSG          Set the client Will message to MSG\n"
 " --will-qos QOS              Set the QoS level for client Will message\n"
@@ -87,8 +87,8 @@ int usage(int retcode)
 " --key FILE                  Client private key for authentication\n"
 " --ciphers LIST              OpenSSL compatible list of TLS ciphers\n"
 " --tls-version VERSION       TLS protocol version: tlsv1.2 tlsv1.1 tlsv1\n"
-" --psk KEY                   pre-shared-key in hexadecimal (no leading 0x)\n"
-" --psk-identity STRING       client identity string for TLS-PSK mode\n"
+" --psk KEY                   Pre-shared-key in hexadecimal (no leading 0x)\n"
+" --psk-identity STRING       Client identity string for TLS-PSK mode\n"
 #endif
 		"\n", major, minor, rev);
 	return retcode;
