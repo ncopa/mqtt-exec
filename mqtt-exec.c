@@ -34,6 +34,11 @@ void message_cb(struct mosquitto *mosq, void *obj,
 	struct userdata *ud = (struct userdata *)obj;
 	if (msg->payloadlen || ud->verbose) {
 		if (ud->command_argv && fork() == 0) {
+			/* mosquitto ignores SIGPIPE, this is a problem as it
+			 * gets inherited by all processes spawned by mqtt-exec
+			 * restore the default handler explicitly for now. */
+			signal(SIGPIPE, SIG_DFL);
+
 			if (ud->verbose)
 				ud->command_argv[ud->command_argc-2] = msg->topic;
 			ud->command_argv[ud->command_argc-1] =
