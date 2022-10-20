@@ -205,6 +205,7 @@ int main(int argc, char *argv[])
 			break;
 		case 'P':
 			password = optarg;
+			break;
 		case 'q':
 			ud.qos = atoi(optarg);
 			if (!valid_qos_range(ud.qos, "QoS"))
@@ -218,6 +219,7 @@ int main(int argc, char *argv[])
 			break;
 		case 'u':
 			username = optarg;
+			break;
 		case 'v':
 			ud.verbose = 1;
 			break;
@@ -267,7 +269,7 @@ int main(int argc, char *argv[])
 	}
 
 	if ((ud.topics == NULL) || (optind == argc))
-		return usage(1);
+		return usage(2);
 
 	ud.command_argc = (argc - optind) + 1 + ud.verbose;
 	ud.command_argv = malloc((ud.command_argc + 1) * sizeof(char *));
