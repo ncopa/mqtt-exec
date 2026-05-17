@@ -138,6 +138,29 @@ wait_for_file() {
 	[ "$output" = "$(printf '%s\nunset' "$topic")" ]
 }
 
+@test "executes a command for a live message from the broker" {
+	script="printf '%s' \"\$1\" > '$output_file'"
+	"$MQTT_EXEC" -h "$MQTT_TEST_HOST" \
+		-p "$MQTT_TEST_PORT" \
+		-t "$topic" \
+		-- /bin/sh -c "$script" /bin/sh &
+	echo $! > "$pid_file"
+
+	sleep 0.2
+
+	run mosquitto_pub -h "$MQTT_TEST_HOST" \
+		-p "$MQTT_TEST_PORT" \
+		-t "$topic" \
+		-m "live message"
+	[ "$status" -eq 0 ]
+
+	wait_for_file "$output_file"
+
+	run cat "$output_file"
+	[ "$status" -eq 0 ]
+	[ "$output" = "live message" ]
+}
+
 @test "executes a command for a retained message from the broker" {
 	run mosquitto_pub -h "$MQTT_TEST_HOST" \
 		-p "$MQTT_TEST_PORT" \
