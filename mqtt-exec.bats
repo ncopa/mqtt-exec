@@ -102,6 +102,13 @@ wait_for_file() {
 	[[ "$output" =~ ^mqtt-exec[[:space:]][0-9] ]]
 }
 
+@test "rejects an overly long client id" {
+	long_id="abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz"
+	run "$MQTT_EXEC" -i "$long_id" -t "$topic" -- /bin/true
+	[ "$status" -eq 1 ]
+	[[ "$output" =~ ^specified\ id\ is\ longer\ than\ [0-9]+\ chars$ ]]
+}
+
 @test "requires at least one topic" {
 	run "$MQTT_EXEC" -- /bin/true
 	[ "$status" -eq 2 ]
