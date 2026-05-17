@@ -84,6 +84,12 @@ wait_for_file() {
 	[ "$output" = "3: QoS out of range" ]
 }
 
+@test "rejects invalid will QoS values" {
+	run "$MQTT_EXEC" --will-qos 3 -t "$topic" -- /bin/true
+	[ "$status" -eq 1 ]
+	[ "$output" = "3: will QoS out of range" ]
+}
+
 @test "verbose mode executes for an empty payload and passes the topic" {
 	script="printf '%s\n%s' \"\${1-unset}\" \"\${2-unset}\" > '$output_file'"
 	"$MQTT_EXEC" -v \
