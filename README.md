@@ -8,6 +8,9 @@ Build requriements
 - C compiler + make
 - libmosquitto
 
+Test requirements
+-----------------
+- bats
 
 Example usage
 -------------

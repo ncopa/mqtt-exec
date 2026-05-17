@@ -104,6 +104,12 @@ int usage(int retcode)
 	return retcode;
 }
 
+static int version(void)
+{
+	printf("mqtt-exec %s\n", VERSION);
+	return 0;
+}
+
 static int perror_ret(const char *msg)
 {
 	perror(msg);
@@ -137,6 +143,7 @@ int main(int argc, char *argv[])
 		{"will-payload", required_argument,	0, 0x1002 },
 		{"will-qos",	required_argument,	0, 0x1003 },
 		{"will-retain",	no_argument,		0, 0x1004 },
+		{"version",	no_argument,		0, 0x1005 },
 #ifdef WITH_TLS
 		{"cafile",	required_argument,	0, 0x2001 },
 		{"capath",	required_argument,	0, 0x2002 },
@@ -237,6 +244,8 @@ int main(int argc, char *argv[])
 		case 0x1004:
 			will_retain = 1;
 			break;
+		case 0x1005:
+			return version();
 #ifdef WITH_TLS
 		case 0x2001:
 			cafile = optarg;

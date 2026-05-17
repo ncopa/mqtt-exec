@@ -2,6 +2,7 @@
 VERSION=0.4
 LIBS=-lmosquitto
 CFLAGS ?= -g -Wall -Werror
+CFLAGS += -DVERSION=\"$(VERSION)\"
 WITH_TLS := 1
 
 ifeq ($(WITH_TLS),1)
@@ -13,3 +14,6 @@ mqtt-exec: mqtt-exec.c
 
 clean:
 	rm -f mqtt-exec
+
+check: mqtt-exec
+	bats --print-output-on-failure ./mqtt-exec.bats
