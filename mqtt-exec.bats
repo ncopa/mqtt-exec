@@ -164,6 +164,13 @@ assert_single_message() {
 	[ "$output" = "3: will QoS out of range" ]
 }
 
+@test "rejects invalid status QoS values" {
+	run "$MQTT_EXEC" --status-topic "$topic/state" --status-qos 3 \
+		-t "$topic" -- /bin/true
+	[ "$status" -eq 1 ]
+	[ "$output" = "3: status QoS out of range" ]
+}
+
 @test "requires both username and password" {
 	run "$MQTT_EXEC" -u user -t "$topic" -- /bin/true
 	[ "$status" -eq 1 ]
@@ -357,6 +364,22 @@ assert_single_message() {
 	assert_single_message "$second_sub_pid" "$second_status" "online" 50
 }
 
+@test "publishes an empty up status when only status topic is set" {
+	status_topic="${topic}/state"
+	status_path="$BATS_TEST_TMPDIR/status-empty.$$"
+	start_single_message_subscriber "$status_topic" "$status_path"
+	status_sub_pid="$SUB_PID"
+
+	"$MQTT_EXEC" -h "$MQTT_TEST_HOST" \
+		-p "$MQTT_TEST_PORT" \
+		-t "$topic" \
+		--status-topic "$status_topic" \
+		-- /bin/true &
+	echo $! > "$pid_file"
+
+	assert_single_message "$status_sub_pid" "$status_path" ""
+}
+
 @test "publishes the configured down status on clean shutdown" {
 	status_topic="${topic}/state"
 	up_path="$BATS_TEST_TMPDIR/status-up.$$"
@@ -385,6 +408,36 @@ assert_single_message() {
 	rm -f "$pid_file"
 
 	assert_single_message "$down_sub_pid" "$down_path" "offline"
+}
+
+@test "publishes the will payload on unclean disconnect without status options" {
+	will_topic="${topic}/will"
+	will_path="$BATS_TEST_TMPDIR/will-only.$$"
+
+	"$MQTT_EXEC" -h "$MQTT_TEST_HOST" \
+		-p "$MQTT_TEST_PORT" \
+		-t "$topic" \
+		--will-topic "$will_topic" \
+		--will-payload failed \
+		-- /bin/true &
+	echo $! > "$pid_file"
+
+	mosquitto_sub -h "$MQTT_TEST_HOST" \
+		-p "$MQTT_TEST_PORT" \
+		-C 1 \
+		-t "$will_topic" >"$will_path" &
+	sub_pid=$!
+
+	sleep 0.2
+
+	kill -KILL "$(cat "$pid_file")"
+	wait "$(cat "$pid_file")" 2>/dev/null || true
+	rm -f "$pid_file"
+
+	wait "$sub_pid"
+	run cat "$will_path"
+	[ "$status" -eq 0 ]
+	[ "$output" = "failed" ]
 }
 
 @test "keeps clean shutdown status separate from the will payload" {
