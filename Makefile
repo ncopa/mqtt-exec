@@ -1,5 +1,9 @@
 
 VERSION=0.4
+PREFIX ?= /usr
+BINDIR ?= $(PREFIX)/bin
+MANDIR ?= $(PREFIX)/share/man
+MAN1DIR ?= $(MANDIR)/man1
 LIBS=-lmosquitto
 CFLAGS ?= -g -Wall -Werror
 CFLAGS += -DVERSION=\"$(VERSION)\"
@@ -16,6 +20,11 @@ mqtt-exec: mqtt-exec.c
 
 mqtt-exec.1: mqtt-exec.1.scd
 	$(SCDOC) < $< > $@
+
+install: mqtt-exec mqtt-exec.1
+	install -d "$(DESTDIR)$(BINDIR)" "$(DESTDIR)$(MAN1DIR)"
+	install -m755 mqtt-exec "$(DESTDIR)$(BINDIR)/mqtt-exec"
+	install -m644 mqtt-exec.1 "$(DESTDIR)$(MAN1DIR)/mqtt-exec.1"
 
 clean:
 	rm -f mqtt-exec mqtt-exec.1
