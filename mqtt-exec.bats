@@ -161,6 +161,42 @@ wait_for_file() {
 	[ "$output" = "live message" ]
 }
 
+@test "subscribes to multiple topics" {
+	topic2="${topic}/second"
+	script="printf '%s\n' \"\$1\" >> '$output_file'"
+	"$MQTT_EXEC" -h "$MQTT_TEST_HOST" \
+		-p "$MQTT_TEST_PORT" \
+		-t "$topic" \
+		-t "$topic2" \
+		-- /bin/sh -c "$script" /bin/sh &
+	echo $! > "$pid_file"
+
+	sleep 0.2
+
+	run mosquitto_pub -h "$MQTT_TEST_HOST" \
+		-p "$MQTT_TEST_PORT" \
+		-t "$topic" \
+		-m "first topic"
+	[ "$status" -eq 0 ]
+
+	run mosquitto_pub -h "$MQTT_TEST_HOST" \
+		-p "$MQTT_TEST_PORT" \
+		-t "$topic2" \
+		-m "second topic"
+	[ "$status" -eq 0 ]
+
+	for _ in 1 2 3 4 5 6 7 8 9 10; do
+		if [ -f "$output_file" ] && [ "$(wc -l < "$output_file")" -eq 2 ]; then
+			break
+		fi
+		sleep 0.2
+	done
+
+	run sort "$output_file"
+	[ "$status" -eq 0 ]
+	[ "$output" = "$(printf '%s\n%s' "first topic" "second topic")" ]
+}
+
 @test "executes a command for a retained message from the broker" {
 	run mosquitto_pub -h "$MQTT_TEST_HOST" \
 		-p "$MQTT_TEST_PORT" \
