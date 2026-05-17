@@ -90,6 +90,12 @@ wait_for_file() {
 	[ "$output" = "3: will QoS out of range" ]
 }
 
+@test "requires both username and password" {
+	run "$MQTT_EXEC" -u user -t "$topic" -- /bin/true
+	[ "$status" -eq 1 ]
+	[ "$output" = "Need to set both username and password" ]
+}
+
 @test "verbose mode executes for an empty payload and passes the topic" {
 	script="printf '%s\n%s' \"\${1-unset}\" \"\${2-unset}\" > '$output_file'"
 	"$MQTT_EXEC" -v \
