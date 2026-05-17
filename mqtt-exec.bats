@@ -1,6 +1,76 @@
 #!/usr/bin/env bats
 
 MQTT_EXEC="$BATS_TEST_DIRNAME/mqtt-exec"
+MQTT_TEST_HOST="${MQTT_TEST_HOST:-127.0.0.1}"
+MQTT_TEST_PORT="${MQTT_TEST_PORT:-18884}"
+
+setup_file() {
+	workdir="$(mktemp -d "${TMPDIR:-/tmp}/mqtt-exec-test.XXXXXX")"
+	pidfile="$workdir/mosquitto.pid"
+	conffile="$workdir/mosquitto.conf"
+	logfile="$workdir/mosquitto.log"
+
+	cat >"$conffile" <<EOF
+listener $MQTT_TEST_PORT $MQTT_TEST_HOST
+allow_anonymous true
+persistence false
+pid_file $pidfile
+log_dest file $logfile
+EOF
+
+	mosquitto -c "$conffile" -d
+
+	for _ in 1 2 3 4 5 6 7 8 9 10; do
+		if mosquitto_pub -h "$MQTT_TEST_HOST" -p "$MQTT_TEST_PORT" \
+			-t _mqtt_exec_probe -m ready >/dev/null 2>&1; then
+			return 0
+		fi
+		sleep 0.2
+	done
+
+	[ -f "$logfile" ] && cat "$logfile" >&2
+	return 1
+}
+
+teardown_file() {
+	if [ -f "$pidfile" ]; then
+		kill "$(cat "$pidfile")" 2>/dev/null || true
+		wait "$(cat "$pidfile")" 2>/dev/null || true
+	fi
+
+	rm -rf "$workdir"
+}
+
+setup() {
+	topic="mqtt-exec/test/${BATS_TEST_NUMBER}.$$"
+	output_file="$BATS_TEST_TMPDIR/payload"
+	pid_file="$BATS_TEST_TMPDIR/mqtt-exec.pid"
+}
+
+teardown() {
+	if [ -f "$pid_file" ]; then
+		kill "$(cat "$pid_file")" 2>/dev/null || true
+		wait "$(cat "$pid_file")" 2>/dev/null || true
+	fi
+
+	mosquitto_pub -h "$MQTT_TEST_HOST" \
+		-p "$MQTT_TEST_PORT" \
+		-t "$topic" \
+		-n -r >/dev/null 2>&1 || true
+}
+
+wait_for_file() {
+	local path="$1"
+	local tries=15
+
+	while [ "$tries" -gt 0 ]; do
+		[ -f "$path" ] && return 0
+		sleep 0.2
+		tries=$((tries - 1))
+	done
+
+	return 1
+}
 
 @test "--version prints the program version" {
 	run "$MQTT_EXEC" --version
@@ -8,3 +78,23 @@ MQTT_EXEC="$BATS_TEST_DIRNAME/mqtt-exec"
 	[[ "$output" =~ ^mqtt-exec[[:space:]][0-9] ]]
 }
 
+@test "executes a command for a retained message from the broker" {
+	run mosquitto_pub -h "$MQTT_TEST_HOST" \
+		-p "$MQTT_TEST_PORT" \
+		-t "$topic" \
+		-m "hello world" -r
+	[ "$status" -eq 0 ]
+
+	script="printf '%s' \"\$1\" > '$output_file'"
+	"$MQTT_EXEC" -h "$MQTT_TEST_HOST" \
+		-p "$MQTT_TEST_PORT" \
+		-t "$topic" \
+		-- /bin/sh -c "$script" /bin/sh &
+	echo $! > "$pid_file"
+
+	wait_for_file "$output_file"
+
+	run cat "$output_file"
+	[ "$status" -eq 0 ]
+	[ "$output" = "hello world" ]
+}

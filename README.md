@@ -11,6 +11,8 @@ Build requriements
 Test requirements
 -----------------
 - bats
+- mosquitto
+- mosquitto-clients
 
 Example usage
 -------------
