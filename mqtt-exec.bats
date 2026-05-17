@@ -102,6 +102,18 @@ wait_for_file() {
 	[[ "$output" =~ ^mqtt-exec[[:space:]][0-9] ]]
 }
 
+@test "requires at least one topic" {
+	run "$MQTT_EXEC" -- /bin/true
+	[ "$status" -eq 2 ]
+	[[ "$output" =~ ^mqtt-exec\ -\ execute\ command\ on\ mqtt\ messages ]]
+}
+
+@test "requires a command after the topic" {
+	run "$MQTT_EXEC" -t "$topic"
+	[ "$status" -eq 2 ]
+	[[ "$output" =~ ^mqtt-exec\ -\ execute\ command\ on\ mqtt\ messages ]]
+}
+
 @test "verbose mode executes for an empty payload and passes the topic" {
 	script="printf '%s\n%s' \"\${1-unset}\" \"\${2-unset}\" > '$output_file'"
 	"$MQTT_EXEC" -v \
