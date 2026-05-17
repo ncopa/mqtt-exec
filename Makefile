@@ -5,6 +5,7 @@ CFLAGS ?= -g -Wall -Werror
 CFLAGS += -DVERSION=\"$(VERSION)\"
 WITH_TLS := 1
 SCDOC ?= scdoc
+CHECK_TIMEOUT ?= 30
 
 ifeq ($(WITH_TLS),1)
 CFLAGS += -DWITH_TLS
@@ -20,4 +21,4 @@ clean:
 	rm -f mqtt-exec mqtt-exec.1
 
 check: mqtt-exec
-	bats --print-output-on-failure ./mqtt-exec.bats
+	timeout $(CHECK_TIMEOUT) bats --print-output-on-failure ./mqtt-exec.bats

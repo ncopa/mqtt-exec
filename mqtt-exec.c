@@ -14,6 +14,8 @@
 
 #include <mosquitto.h>
 
+static volatile sig_atomic_t g_stop = 0;
+
 struct userdata {
 	char **topics;
 	size_t topic_count;
@@ -21,6 +23,11 @@ struct userdata {
 	int verbose;
 	char **command_argv;
 	int qos;
+	char *status_topic;
+	char *status_up_payload;
+	char *status_down_payload;
+	int status_qos;
+	bool status_retain;
 };
 
 void log_cb(struct mosquitto *mosq, void *obj, int level, const char *str)
@@ -50,6 +57,12 @@ void message_cb(struct mosquitto *mosq, void *obj,
 	}
 }
 
+static void handle_stop_signal(int sig)
+{
+	(void)sig;
+	g_stop = 1;
+}
+
 void connect_cb(struct mosquitto *mosq, void *obj, int result)
 {
 	struct userdata *ud = (struct userdata *)obj;
@@ -58,6 +71,18 @@ void connect_cb(struct mosquitto *mosq, void *obj, int result)
 		size_t i;
 		for (i = 0; i < ud->topic_count; i++)
 			mosquitto_subscribe(mosq, NULL, ud->topics[i], ud->qos);
+		if (ud->status_topic) {
+			int rc = mosquitto_publish(
+				mosq,
+				NULL,
+				ud->status_topic,
+				ud->status_up_payload ? strlen(ud->status_up_payload) : 0,
+				ud->status_up_payload,
+				ud->status_qos,
+				ud->status_retain);
+			if (rc != MOSQ_ERR_SUCCESS)
+				fprintf(stderr, "Failed to publish up status (%d)\n", rc);
+		}
 	} else {
 		fprintf(stderr, "%s\n", mosquitto_connack_string(result));
 	}
@@ -90,6 +115,11 @@ int usage(int retcode)
 " --will-payload MSG          Set the client Will message to MSG\n"
 " --will-qos QOS              Set the QoS level for client Will message\n"
 " --will-retain               Make the client Will retained\n"
+" --status-topic TOPIC        Publish to TOPIC after each successful connect\n"
+" --status-up-payload MSG     Message to publish after each successful connect\n"
+" --status-down-payload MSG   Message to publish on clean shutdown\n"
+" --status-qos QOS            QoS for status publishes\n"
+" --status-retain             Make status publishes retained\n"
 #ifdef WITH_TLS
 " --cafile FILE               Path to file containing CA certificates\n"
 " --capath DIR                Path to directory containing CA certificates\n"
@@ -144,6 +174,11 @@ int main(int argc, char *argv[])
 		{"will-qos",	required_argument,	0, 0x1003 },
 		{"will-retain",	no_argument,		0, 0x1004 },
 		{"version",	no_argument,		0, 0x1005 },
+		{"status-topic",	required_argument,	0, 0x1006 },
+		{"status-up-payload",	required_argument,	0, 0x1007 },
+		{"status-down-payload",	required_argument,	0, 0x1008 },
+		{"status-qos",	required_argument,	0, 0x1009 },
+		{"status-retain",	no_argument,		0, 0x100a },
 #ifdef WITH_TLS
 		{"cafile",	required_argument,	0, 0x2001 },
 		{"capath",	required_argument,	0, 0x2002 },
@@ -172,6 +207,11 @@ int main(int argc, char *argv[])
 	int will_qos = 0;
 	bool will_retain = false;
 	char *will_topic = NULL;
+	char *status_topic = NULL;
+	char *status_up_payload = NULL;
+	char *status_down_payload = NULL;
+	int status_qos = 0;
+	bool status_retain = false;
 #ifdef WITH_TLS
 	char *cafile = NULL;
 	char *capath = NULL;
@@ -246,6 +286,23 @@ int main(int argc, char *argv[])
 			break;
 		case 0x1005:
 			return version();
+		case 0x1006:
+			status_topic = optarg;
+			break;
+		case 0x1007:
+			status_up_payload = optarg;
+			break;
+		case 0x1008:
+			status_down_payload = optarg;
+			break;
+		case 0x1009:
+			status_qos = atoi(optarg);
+			if (!valid_qos_range(status_qos, "status QoS"))
+				return 1;
+			break;
+		case 0x100a:
+			status_retain = 1;
+			break;
 #ifdef WITH_TLS
 		case 0x2001:
 			cafile = optarg;
@@ -279,6 +336,12 @@ int main(int argc, char *argv[])
 
 	if ((ud.topics == NULL) || (optind == argc))
 		return usage(2);
+
+	ud.status_topic = status_topic;
+	ud.status_up_payload = status_up_payload;
+	ud.status_down_payload = status_down_payload;
+	ud.status_qos = status_qos;
+	ud.status_retain = status_retain;
 
 	ud.command_argc = (argc - optind) + 1 + ud.verbose;
 	ud.command_argv = malloc((ud.command_argc + 1) * sizeof(char *));
@@ -341,6 +404,8 @@ int main(int argc, char *argv[])
 
 	/* let kernel reap the children */
 	signal(SIGCHLD, SIG_IGN);
+	signal(SIGINT, handle_stop_signal);
+	signal(SIGTERM, handle_stop_signal);
 
 	rc = mosquitto_connect(mosq, host, port, keepalive);
 	if (rc != MOSQ_ERR_SUCCESS) {
@@ -350,7 +415,31 @@ int main(int argc, char *argv[])
 		goto cleanup;
 	}
 
-	rc = mosquitto_loop_forever(mosq, -1, 1);
+	while (!g_stop) {
+		rc = mosquitto_loop(mosq, -1, 1);
+		if (g_stop)
+			break;
+		if (rc == MOSQ_ERR_SUCCESS)
+			continue;
+		if (rc != MOSQ_ERR_ERRNO && debug)
+			fprintf(stderr, "Reconnecting after loop error (%d)\n", rc);
+		while (!g_stop && (rc = mosquitto_reconnect(mosq)) != MOSQ_ERR_SUCCESS)
+			sleep(1);
+	}
+
+	if (g_stop && status_topic && status_down_payload) {
+		rc = mosquitto_publish(mosq, NULL, status_topic,
+				       strlen(status_down_payload),
+				       status_down_payload, status_qos,
+				       status_retain);
+		if (rc != MOSQ_ERR_SUCCESS)
+			fprintf(stderr, "Failed to publish down status (%d)\n", rc);
+		else
+			mosquitto_loop(mosq, 100, 1);
+		mosquitto_disconnect(mosq);
+		mosquitto_loop(mosq, 100, 1);
+		rc = MOSQ_ERR_SUCCESS;
+	}
 
 cleanup:
 	mosquitto_destroy(mosq);

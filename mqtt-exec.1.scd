@@ -19,6 +19,13 @@ second-to-last argument and the payload is passed as the last argument.
 
 Empty payloads are ignored unless *-v* is enabled.
 
+After each successful connection, *mqtt-exec* can optionally publish an
+"up" status message before waiting for subscribed messages.
+
+When *--status-down-payload* is configured, *mqtt-exec* publishes that
+message on clean shutdown. Unexpected termination is still handled
+separately through the MQTT will configured with *--will-** options.
+
 # OPTIONS
 
 *-c*, *--disable-clean-session*
@@ -69,6 +76,22 @@ Empty payloads are ignored unless *-v* is enabled.
 *--will-retain*
 	Publish the MQTT will as a retained message.
 
+*--status-topic* _topic_
+	Publish status transitions to _topic_.
+
+*--status-up-payload* _payload_
+	Set the payload used after each successful connection. If omitted, an
+	empty payload is sent.
+
+*--status-down-payload* _payload_
+	Set the payload used on clean shutdown.
+
+*--status-qos* _qos_
+	Set the QoS for status publishes. Valid values are *0*, *1*, and *2*.
+
+*--status-retain*
+	Publish status messages as retained messages.
+
 # TLS OPTIONS
 
 When built with TLS support, the following options are available:
@@ -116,6 +139,20 @@ Run a script for retained messages on startup and for later live messages:
 
 ```
 $ mqtt-exec -h broker.example.com -t sensors/door -- /usr/local/bin/on-door-event
+```
+
+Publish presence status and process messages:
+
+```
+$ mqtt-exec -h broker.example.com \
+	-t sensors/door \
+	--status-topic service/mqtt-exec/status \
+	--status-up-payload online \
+	--status-down-payload offline \
+	--will-topic service/mqtt-exec/status \
+	--will-payload failed \
+	--status-retain \
+	-- /usr/local/bin/on-door-event
 ```
 
 # SEE ALSO

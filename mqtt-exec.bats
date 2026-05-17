@@ -4,21 +4,15 @@ MQTT_EXEC="$BATS_TEST_DIRNAME/mqtt-exec"
 MQTT_TEST_HOST="${MQTT_TEST_HOST:-127.0.0.1}"
 MQTT_TEST_PORT="${MQTT_TEST_PORT:-18884}"
 
-setup_file() {
-	workdir="$(mktemp -d "${TMPDIR:-/tmp}/mqtt-exec-test.XXXXXX")"
+init_broker_paths() {
+	workdir="${BATS_FILE_TMPDIR:-${TMPDIR:-/tmp}}/mqtt-exec-test"
 	pidfile="$workdir/mosquitto.pid"
 	conffile="$workdir/mosquitto.conf"
 	logfile="$workdir/mosquitto.log"
+}
 
-	cat >"$conffile" <<EOF
-listener $MQTT_TEST_PORT $MQTT_TEST_HOST
-allow_anonymous true
-persistence false
-pid_file $pidfile
-log_dest file $logfile
-EOF
-
-	mosquitto -c "$conffile" -d
+wait_for_broker() {
+	init_broker_paths
 
 	for _ in 1 2 3 4 5 6 7 8 9 10; do
 		if mosquitto_pub -h "$MQTT_TEST_HOST" -p "$MQTT_TEST_PORT" \
@@ -32,11 +26,40 @@ EOF
 	return 1
 }
 
-teardown_file() {
+start_broker() {
+	init_broker_paths
+	mosquitto -c "$conffile" -d
+	wait_for_broker
+}
+
+stop_broker() {
+	init_broker_paths
 	if [ -f "$pidfile" ]; then
 		kill "$(cat "$pidfile")" 2>/dev/null || true
 		wait "$(cat "$pidfile")" 2>/dev/null || true
+		rm -f "$pidfile"
 	fi
+}
+
+setup_file() {
+	init_broker_paths
+	rm -rf "$workdir"
+	mkdir -p "$workdir"
+
+	cat >"$conffile" <<EOF
+listener $MQTT_TEST_PORT $MQTT_TEST_HOST
+allow_anonymous true
+persistence false
+pid_file $pidfile
+log_dest file $logfile
+EOF
+
+	start_broker
+}
+
+teardown_file() {
+	init_broker_paths
+	stop_broker
 
 	rm -rf "$workdir"
 }
@@ -45,6 +68,7 @@ setup() {
 	topic="mqtt-exec/test/${BATS_TEST_NUMBER}.$$"
 	output_file="$BATS_TEST_TMPDIR/payload"
 	pid_file="$BATS_TEST_TMPDIR/mqtt-exec.pid"
+	status_topic=
 }
 
 teardown() {
@@ -57,6 +81,12 @@ teardown() {
 		-p "$MQTT_TEST_PORT" \
 		-t "$topic" \
 		-n -r >/dev/null 2>&1 || true
+	if [ -n "$status_topic" ]; then
+		mosquitto_pub -h "$MQTT_TEST_HOST" \
+			-p "$MQTT_TEST_PORT" \
+			-t "$status_topic" \
+			-n -r >/dev/null 2>&1 || true
+	fi
 }
 
 wait_for_file() {
@@ -70,6 +100,50 @@ wait_for_file() {
 	done
 
 	return 1
+}
+
+wait_for_process_exit() {
+	local pid="$1"
+	local tries="${2:-15}"
+
+	while [ "$tries" -gt 0 ]; do
+		if ! kill -0 "$pid" 2>/dev/null; then
+			return 0
+		fi
+		sleep 0.2
+		tries=$((tries - 1))
+	done
+
+	return 1
+}
+
+start_single_message_subscriber() {
+	local topic="$1"
+	local output_path="$2"
+
+	rm -f "$output_path"
+	mosquitto_sub -h "$MQTT_TEST_HOST" \
+		-p "$MQTT_TEST_PORT" \
+		-C 1 \
+		-t "$topic" >"$output_path" &
+	SUB_PID=$!
+}
+
+assert_single_message() {
+	local sub_pid="$1"
+	local output_path="$2"
+	local expected="$3"
+	local tries="${4:-15}"
+	if ! wait_for_process_exit "$sub_pid" "$tries"; then
+		kill "$sub_pid" 2>/dev/null || true
+		wait "$sub_pid" 2>/dev/null || true
+		return 1
+	fi
+
+	wait "$sub_pid" 2>/dev/null || true
+	run cat "$output_path"
+	[ "$status" -eq 0 ]
+	[ "$output" = "$expected" ]
 }
 
 @test "--version prints the program version" {
@@ -247,4 +321,98 @@ wait_for_file() {
 	run cat "$output_file"
 	[ "$status" -eq 0 ]
 	[ "$output" = "hello world" ]
+}
+
+@test "publishes the configured status message after reconnect" {
+	status_topic="${topic}/state"
+	first_status="$BATS_TEST_TMPDIR/status-first.$$"
+	second_status="$BATS_TEST_TMPDIR/status-second.$$"
+	start_single_message_subscriber "$status_topic" "$first_status"
+	first_sub_pid="$SUB_PID"
+
+	"$MQTT_EXEC" -h "$MQTT_TEST_HOST" \
+		-p "$MQTT_TEST_PORT" \
+		-t "$topic" \
+		--status-topic "$status_topic" \
+		--status-up-payload online \
+		--status-retain \
+		-- /bin/true &
+	echo $! > "$pid_file"
+
+	assert_single_message "$first_sub_pid" "$first_status" "online"
+
+	start_single_message_subscriber "$status_topic" "$second_status"
+	second_sub_pid="$SUB_PID"
+
+	stop_broker
+	start_broker
+
+	assert_single_message "$second_sub_pid" "$second_status" "online" 50
+}
+
+@test "publishes the configured down status on clean shutdown" {
+	status_topic="${topic}/state"
+	up_path="$BATS_TEST_TMPDIR/status-up.$$"
+	down_path="$BATS_TEST_TMPDIR/status-down.$$"
+	start_single_message_subscriber "$status_topic" "$up_path"
+	up_sub_pid="$SUB_PID"
+
+	"$MQTT_EXEC" -h "$MQTT_TEST_HOST" \
+		-p "$MQTT_TEST_PORT" \
+		-t "$topic" \
+		--status-topic "$status_topic" \
+		--status-up-payload online \
+		--status-down-payload offline \
+		-- /bin/true &
+	echo $! > "$pid_file"
+
+	assert_single_message "$up_sub_pid" "$up_path" "online"
+
+	start_single_message_subscriber "$status_topic" "$down_path"
+	down_sub_pid="$SUB_PID"
+	sleep 0.2
+
+	kill -TERM "$(cat "$pid_file")"
+	wait_for_process_exit "$(cat "$pid_file")"
+	wait "$(cat "$pid_file")" 2>/dev/null || true
+	rm -f "$pid_file"
+
+	assert_single_message "$down_sub_pid" "$down_path" "offline"
+}
+
+@test "keeps clean shutdown status separate from the will payload" {
+	status_topic="${topic}/state"
+	will_topic="${topic}/will"
+	up_path="$BATS_TEST_TMPDIR/status-up.$$"
+	will_path="$BATS_TEST_TMPDIR/will.$$"
+	start_single_message_subscriber "$status_topic" "$up_path"
+	up_sub_pid="$SUB_PID"
+
+	"$MQTT_EXEC" -h "$MQTT_TEST_HOST" \
+		-p "$MQTT_TEST_PORT" \
+		-t "$topic" \
+		--status-topic "$status_topic" \
+		--status-up-payload online \
+		--status-down-payload offline \
+		--will-topic "$will_topic" \
+		--will-payload failed \
+		-- /bin/true &
+	echo $! > "$pid_file"
+
+	assert_single_message "$up_sub_pid" "$up_path" "online"
+
+	mosquitto_sub -h "$MQTT_TEST_HOST" \
+		-p "$MQTT_TEST_PORT" \
+		-C 1 \
+		-t "$will_topic" >"$will_path" &
+	sub_pid=$!
+
+	kill -KILL "$(cat "$pid_file")"
+	wait "$(cat "$pid_file")" 2>/dev/null || true
+	rm -f "$pid_file"
+
+	wait "$sub_pid"
+	run cat "$will_path"
+	[ "$status" -eq 0 ]
+	[ "$output" = "failed" ]
 }
