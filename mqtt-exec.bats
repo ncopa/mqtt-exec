@@ -84,6 +84,30 @@ wait_for_file() {
 	[ "$output" = "3: QoS out of range" ]
 }
 
+@test "verbose mode executes for an empty payload and passes the topic" {
+	script="printf '%s\n%s' \"\${1-unset}\" \"\${2-unset}\" > '$output_file'"
+	"$MQTT_EXEC" -v \
+		-h "$MQTT_TEST_HOST" \
+		-p "$MQTT_TEST_PORT" \
+		-t "$topic" \
+		-- /bin/sh -c "$script" /bin/sh &
+	echo $! > "$pid_file"
+
+	sleep 0.2
+
+	run mosquitto_pub -h "$MQTT_TEST_HOST" \
+		-p "$MQTT_TEST_PORT" \
+		-t "$topic" \
+		-n
+	[ "$status" -eq 0 ]
+
+	wait_for_file "$output_file"
+
+	run cat "$output_file"
+	[ "$status" -eq 0 ]
+	[ "$output" = "$(printf '%s\nunset' "$topic")" ]
+}
+
 @test "executes a command for a retained message from the broker" {
 	run mosquitto_pub -h "$MQTT_TEST_HOST" \
 		-p "$MQTT_TEST_PORT" \
