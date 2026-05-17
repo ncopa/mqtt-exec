@@ -78,6 +78,12 @@ wait_for_file() {
 	[[ "$output" =~ ^mqtt-exec[[:space:]][0-9] ]]
 }
 
+@test "rejects invalid QoS values" {
+	run "$MQTT_EXEC" -q 3 -t "$topic" -- /bin/true
+	[ "$status" -eq 1 ]
+	[ "$output" = "3: QoS out of range" ]
+}
+
 @test "executes a command for a retained message from the broker" {
 	run mosquitto_pub -h "$MQTT_TEST_HOST" \
 		-p "$MQTT_TEST_PORT" \
