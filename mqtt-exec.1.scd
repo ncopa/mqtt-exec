@@ -24,7 +24,11 @@ After each successful connection, *mqtt-exec* can optionally publish an
 
 When *--status-down-payload* is configured, *mqtt-exec* publishes that
 message on clean shutdown. Unexpected termination is still handled
-separately through the MQTT will configured with *--will-** options.
+separately through the MQTT will configured with *--will-* options.
+
+The clean-shutdown status publish is best effort. *mqtt-exec* attempts to
+flush it before disconnecting, but does not wait for a full QoS 1 or QoS 2
+delivery handshake before exiting.
 
 # OPTIONS
 
@@ -84,7 +88,7 @@ separately through the MQTT will configured with *--will-** options.
 	empty payload is sent.
 
 *--status-down-payload* _payload_
-	Set the payload used on clean shutdown.
+	Set the payload used on clean shutdown. This publish is best effort.
 
 *--status-qos* _qos_
 	Set the QoS for status publishes. Valid values are *0*, *1*, and *2*.

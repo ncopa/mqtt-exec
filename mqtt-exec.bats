@@ -176,6 +176,13 @@ assert_single_message() {
 	[[ "$output" =~ ^mqtt-exec[[:space:]][0-9] ]]
 }
 
+@test "requires a status topic when using status options" {
+	run "$MQTT_EXEC" --status-up-payload online --status-down-payload offline \
+		--status-qos 1 --status-retain -t "$topic" -- /bin/true
+	[ "$status" -eq 1 ]
+	[ "$output" = "Need to set status topic when using status options" ]
+}
+
 @test "rejects an overly long client id" {
 	long_id="abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz"
 	run "$MQTT_EXEC" -i "$long_id" -t "$topic" -- /bin/true

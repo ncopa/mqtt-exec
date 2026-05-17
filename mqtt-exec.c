@@ -212,6 +212,7 @@ int main(int argc, char *argv[])
 	char *status_down_payload = NULL;
 	int status_qos = 0;
 	bool status_retain = false;
+	bool status_opts_used = false;
 #ifdef WITH_TLS
 	char *cafile = NULL;
 	char *capath = NULL;
@@ -291,17 +292,21 @@ int main(int argc, char *argv[])
 			break;
 		case 0x1007:
 			status_up_payload = optarg;
+			status_opts_used = true;
 			break;
 		case 0x1008:
 			status_down_payload = optarg;
+			status_opts_used = true;
 			break;
 		case 0x1009:
 			status_qos = atoi(optarg);
 			if (!valid_qos_range(status_qos, "status QoS"))
 				return 1;
+			status_opts_used = true;
 			break;
 		case 0x100a:
 			status_retain = 1;
+			status_opts_used = true;
 			break;
 #ifdef WITH_TLS
 		case 0x2001:
@@ -336,6 +341,11 @@ int main(int argc, char *argv[])
 
 	if ((ud.topics == NULL) || (optind == argc))
 		return usage(2);
+
+	if (status_opts_used && !status_topic) {
+		fprintf(stderr, "Need to set status topic when using status options\n");
+		return 1;
+	}
 
 	ud.status_topic = status_topic;
 	ud.status_up_payload = status_up_payload;
