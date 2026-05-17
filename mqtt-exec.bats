@@ -96,6 +96,12 @@ wait_for_file() {
 	[ "$output" = "Need to set both username and password" ]
 }
 
+@test "accepts password from MQTT_EXEC_PASSWORD" {
+	MQTT_EXEC_PASSWORD=secret run "$MQTT_EXEC" -u user --version
+	[ "$status" -eq 0 ]
+	[[ "$output" =~ ^mqtt-exec[[:space:]][0-9] ]]
+}
+
 @test "verbose mode executes for an empty payload and passes the topic" {
 	script="printf '%s\n%s' \"\${1-unset}\" \"\${2-unset}\" > '$output_file'"
 	"$MQTT_EXEC" -v \
