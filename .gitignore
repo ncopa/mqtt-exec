@@ -1,3 +1,4 @@
 *.o
 mqtt-exec
 mqtt-exec.1
+mqtt-test
