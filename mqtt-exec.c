@@ -5,7 +5,9 @@
  *
  */
 #include <err.h>
+#include <errno.h>
 #include <getopt.h>
+#include <limits.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,12 +25,46 @@ struct userdata {
 	int verbose;
 	char **command_argv;
 	int qos;
+	int ready_fd;
+	bool ready_sent;
 	char *status_topic;
 	char *status_up_payload;
 	char *status_down_payload;
 	int status_qos;
 	bool status_retain;
 };
+
+static int signal_ready_fd(struct userdata *ud)
+{
+	ssize_t wr;
+
+	if (ud->ready_sent || ud->ready_fd < 0)
+		return 0;
+
+	wr = write(ud->ready_fd, "\n", 1);
+	if (wr != 1) {
+		perror("write");
+		return 1;
+	}
+	close(ud->ready_fd);
+	ud->ready_fd = -1;
+	ud->ready_sent = true;
+	return 0;
+}
+
+static int parse_fd(const char *str, int *fd)
+{
+	char *end;
+	long value;
+
+	errno = 0;
+	value = strtol(str, &end, 10);
+	if (errno != 0 || *str == '\0' || *end != '\0' || value < 0 || value > INT_MAX)
+		return 0;
+
+	*fd = (int)value;
+	return 1;
+}
 
 void log_cb(struct mosquitto *mosq, void *obj, int level, const char *str)
 {
@@ -69,8 +105,19 @@ void connect_cb(struct mosquitto *mosq, void *obj, int result)
 	fflush(stderr);
 	if (result == 0) {
 		size_t i;
-		for (i = 0; i < ud->topic_count; i++)
-			mosquitto_subscribe(mosq, NULL, ud->topics[i], ud->qos);
+		for (i = 0; i < ud->topic_count; i++) {
+			int rc = mosquitto_subscribe(mosq, NULL, ud->topics[i], ud->qos);
+			if (rc != MOSQ_ERR_SUCCESS) {
+				fprintf(stderr, "Failed to subscribe to %s (%d)\n",
+					ud->topics[i], rc);
+				g_stop = 1;
+				return;
+			}
+		}
+		if (signal_ready_fd(ud) != 0) {
+			g_stop = 1;
+			return;
+		}
 		if (ud->status_topic) {
 			int rc = mosquitto_publish(
 				mosq,
@@ -120,6 +167,7 @@ int usage(int retcode)
 " --status-down-payload MSG   Message to publish on clean shutdown\n"
 " --status-qos QOS            QoS for status publishes\n"
 " --status-retain             Make status publishes retained\n"
+" --ready-fd FD               Write a newline to FD after initial subscribe setup\n"
 #ifdef WITH_TLS
 " --cafile FILE               Path to file containing CA certificates\n"
 " --capath DIR                Path to directory containing CA certificates\n"
@@ -179,6 +227,7 @@ int main(int argc, char *argv[])
 		{"status-down-payload",	required_argument,	0, 0x1008 },
 		{"status-qos",	required_argument,	0, 0x1009 },
 		{"status-retain",	no_argument,		0, 0x100a },
+		{"ready-fd",	required_argument,	0, 0x100b },
 #ifdef WITH_TLS
 		{"cafile",	required_argument,	0, 0x2001 },
 		{"capath",	required_argument,	0, 0x2002 },
@@ -213,6 +262,7 @@ int main(int argc, char *argv[])
 	int status_qos = 0;
 	bool status_retain = false;
 	bool status_opts_used = false;
+	int ready_fd = -1;
 #ifdef WITH_TLS
 	char *cafile = NULL;
 	char *capath = NULL;
@@ -308,6 +358,12 @@ int main(int argc, char *argv[])
 			status_retain = 1;
 			status_opts_used = true;
 			break;
+		case 0x100b:
+			if (!parse_fd(optarg, &ready_fd)) {
+				fprintf(stderr, "%s: invalid fd\n", optarg);
+				return 1;
+			}
+			break;
 #ifdef WITH_TLS
 		case 0x2001:
 			cafile = optarg;
@@ -352,6 +408,7 @@ int main(int argc, char *argv[])
 	ud.status_down_payload = status_down_payload;
 	ud.status_qos = status_qos;
 	ud.status_retain = status_retain;
+	ud.ready_fd = ready_fd;
 
 	ud.command_argc = (argc - optind) + 1 + ud.verbose;
 	ud.command_argv = malloc((ud.command_argc + 1) * sizeof(char *));
@@ -452,6 +509,8 @@ int main(int argc, char *argv[])
 	}
 
 cleanup:
+	if (ud.ready_fd >= 0)
+		close(ud.ready_fd);
 	mosquitto_destroy(mosq);
 	mosquitto_lib_cleanup();
 	return rc;

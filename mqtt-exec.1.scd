@@ -96,6 +96,11 @@ delivery handshake before exiting.
 *--status-retain*
 	Publish status messages as retained messages.
 
+*--ready-fd* _fd_
+	Write a newline to file descriptor _fd_ after the initial connection and
+	subscription setup succeeds, then close it. This can be used by test
+	harnesses or service supervisors that need an explicit readiness signal.
+
 # TLS OPTIONS
 
 When built with TLS support, the following options are available:

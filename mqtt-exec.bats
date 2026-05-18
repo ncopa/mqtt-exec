@@ -74,8 +74,6 @@ teardown_file() {
 
 setup() {
 	topic="mqtt-exec/test/${BATS_TEST_NUMBER}.$$"
-	handshake_topic="${topic}/ready"
-	handshake_payload="ready-${BATS_TEST_NUMBER}-$$"
 	output_file="$BATS_TEST_TMPDIR/payload.fifo"
 	ready_fifo="$BATS_TEST_TMPDIR/ready.fifo"
 	pid_file="$BATS_TEST_TMPDIR/mqtt-exec.pid"
@@ -91,7 +89,6 @@ teardown() {
 	fi
 
 	mqtt_pub -t "$topic" -n -r >/dev/null 2>&1 || true
-	mqtt_pub -t "$handshake_topic" -n -r >/dev/null 2>&1 || true
 	if [ -n "$status_topic" ]; then
 		mqtt_pub -t "$status_topic" -n -r >/dev/null 2>&1 || true
 	fi
@@ -174,7 +171,13 @@ start_single_message_subscriber() {
 	ready_fd="$READY_FD"
 	mqtt_sub -C 1 -t "$topic" --ready-fd "$ready_fd" >"$output_path" &
 	SUB_PID=$!
-	read_ready_fd "$ready_fd" >/dev/null
+	read_ready_fd "$ready_fd" >/dev/null || {
+		close_ready_fd "$ready_fd"
+		rm -f "$ready_fifo"
+		kill "$SUB_PID" 2>/dev/null || true
+		wait "$SUB_PID" 2>/dev/null || true
+		return 1
+	}
 	close_ready_fd "$ready_fd"
 	rm -f "$ready_fifo"
 }
@@ -194,21 +197,20 @@ assert_single_message() {
 	[ "$output" = "$expected" ]
 }
 
-wait_for_mqtt_exec_subscription() {
-	local tries=20
+wait_for_mqtt_exec_ready() {
+	open_ready_channel "$ready_fifo"
+}
 
-	make_fifo "$ready_fifo"
-	while [ "$tries" -gt 0 ]; do
-		mqtt_pub -t "$handshake_topic" -m "$handshake_payload" >/dev/null 2>&1 || true
-		if read_fifo "$ready_fifo" 1 >/dev/null 2>&1; then
-			rm -f "$ready_fifo"
-			return 0
-		fi
-		tries=$((tries - 1))
-	done
+consume_mqtt_exec_ready() {
+	local ready_fd="$1"
 
+	read_ready_fd "$ready_fd" >/dev/null || {
+		close_ready_fd "$ready_fd"
+		rm -f "$ready_fifo"
+		return 1
+	}
+	close_ready_fd "$ready_fd"
 	rm -f "$ready_fifo"
-	return 1
 }
 
 @test "--version prints the program version" {
@@ -275,22 +277,19 @@ wait_for_mqtt_exec_subscription() {
 }
 
 @test "verbose mode passes topic and payload" {
+	wait_for_mqtt_exec_ready
+	ready_fd="$READY_FD"
 	make_fifo "$output_file"
-	script='
-if [ "$1" = "'"$handshake_topic"'" ] && [ "$2" = "'"$handshake_payload"'" ]; then
-	printf "\n" > "'"$ready_fifo"'"
-else
-	printf "%s\n%s" "${1-unset}" "${2-unset}" > "'"$output_file"'"
-fi'
+	script='printf "%s\n%s" "${1-unset}" "${2-unset}" > "'"$output_file"'"'
 	"$MQTT_EXEC" -v \
 		-h "$MQTT_TEST_HOST" \
 		-p "$MQTT_TEST_PORT" \
 		-t "$topic" \
-		-t "$handshake_topic" \
+		--ready-fd "$ready_fd" \
 		-- /bin/sh -c "$script" /bin/sh &
 	echo $! > "$pid_file"
 
-	wait_for_mqtt_exec_subscription
+	consume_mqtt_exec_ready "$ready_fd"
 
 	run mqtt_pub -t "$topic" -m "hello verbose"
 	[ "$status" -eq 0 ]
@@ -301,22 +300,19 @@ fi'
 }
 
 @test "verbose mode executes for an empty payload and passes the topic" {
+	wait_for_mqtt_exec_ready
+	ready_fd="$READY_FD"
 	make_fifo "$output_file"
-	script='
-if [ "$1" = "'"$handshake_topic"'" ] && [ "$2" = "'"$handshake_payload"'" ]; then
-	printf "\n" > "'"$ready_fifo"'"
-else
-	printf "%s\n%s" "${1-unset}" "${2-unset}" > "'"$output_file"'"
-fi'
+	script='printf "%s\n%s" "${1-unset}" "${2-unset}" > "'"$output_file"'"'
 	"$MQTT_EXEC" -v \
 		-h "$MQTT_TEST_HOST" \
 		-p "$MQTT_TEST_PORT" \
 		-t "$topic" \
-		-t "$handshake_topic" \
+		--ready-fd "$ready_fd" \
 		-- /bin/sh -c "$script" /bin/sh &
 	echo $! > "$pid_file"
 
-	wait_for_mqtt_exec_subscription
+	consume_mqtt_exec_ready "$ready_fd"
 
 	run mqtt_pub -t "$topic" -n
 	[ "$status" -eq 0 ]
@@ -327,21 +323,18 @@ fi'
 }
 
 @test "executes a command for a live message from the broker" {
+	wait_for_mqtt_exec_ready
+	ready_fd="$READY_FD"
 	make_fifo "$output_file"
-	script='
-if [ "$1" = "'"$handshake_payload"'" ]; then
-	printf "\n" > "'"$ready_fifo"'"
-else
-	printf "%s" "$1" > "'"$output_file"'"
-fi'
+	script='printf "%s" "$1" > "'"$output_file"'"'
 	"$MQTT_EXEC" -h "$MQTT_TEST_HOST" \
 		-p "$MQTT_TEST_PORT" \
 		-t "$topic" \
-		-t "$handshake_topic" \
+		--ready-fd "$ready_fd" \
 		-- /bin/sh -c "$script" /bin/sh &
 	echo $! > "$pid_file"
 
-	wait_for_mqtt_exec_subscription
+	consume_mqtt_exec_ready "$ready_fd"
 
 	run mqtt_pub -t "$topic" -m "live message"
 	[ "$status" -eq 0 ]
@@ -353,6 +346,8 @@ fi'
 
 @test "subscribes to multiple topics" {
 	topic2="${topic}/second"
+	wait_for_mqtt_exec_ready
+	ready_fd="$READY_FD"
 	collector_fifo="$BATS_TEST_TMPDIR/collector.fifo"
 	output_path="$BATS_TEST_TMPDIR/multi-topic.out"
 	make_fifo "$collector_fifo"
@@ -360,21 +355,16 @@ fi'
 	exec 8<>"$collector_fifo"
 	read_fifo_lines "$collector_fifo" 2 >"$output_path" &
 	relay_pid=$!
-	script='
-if [ "$1" = "'"$handshake_payload"'" ]; then
-	printf "\n" > "'"$ready_fifo"'"
-else
-	printf "%s\n" "$1" > "'"$collector_fifo"'"
-fi'
+	script='printf "%s\n" "$1" > "'"$collector_fifo"'"'
 	"$MQTT_EXEC" -h "$MQTT_TEST_HOST" \
 		-p "$MQTT_TEST_PORT" \
 		-t "$topic" \
 		-t "$topic2" \
-		-t "$handshake_topic" \
+		--ready-fd "$ready_fd" \
 		-- /bin/sh -c "$script" /bin/sh &
 	echo $! > "$pid_file"
 
-	wait_for_mqtt_exec_subscription
+	consume_mqtt_exec_ready "$ready_fd"
 
 	run mqtt_pub -t "$topic" -m "first topic"
 	[ "$status" -eq 0 ]
