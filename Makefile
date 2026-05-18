@@ -1,5 +1,5 @@
 
-VERSION=0.7
+VERSION=0.7.1
 PREFIX ?= /usr
 BINDIR ?= $(PREFIX)/bin
 MANDIR ?= $(PREFIX)/share/man
