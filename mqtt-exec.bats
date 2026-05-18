@@ -265,6 +265,31 @@ consume_mqtt_exec_ready() {
 	[[ "$output" =~ ^mqtt-exec[[:space:]][0-9] ]]
 }
 
+@test "does not leak MQTT_EXEC_PASSWORD to executed commands" {
+	wait_for_mqtt_exec_ready
+	ready_fd="$READY_FD"
+	make_fifo "$output_file"
+	script='printf "%s" "${MQTT_EXEC_PASSWORD-unset}" > "'"$output_file"'"'
+	env -i PATH="$MQTT_EXEC_ENV_PATH" MQTT_EXEC_PASSWORD=secret \
+		"$MQTT_EXEC" -u user \
+		-h "$MQTT_TEST_HOST" \
+		-p "$MQTT_TEST_PORT" \
+		-t "$topic" \
+		--ready-fd "$ready_fd" \
+		-- /bin/sh -c "$script" /bin/sh &
+	MQTT_EXEC_PID=$!
+	echo "$MQTT_EXEC_PID" > "$pid_file"
+
+	consume_mqtt_exec_ready "$ready_fd"
+
+	run mqtt_pub -t "$topic" -m "check leak"
+	[ "$status" -eq 0 ]
+
+	run read_fifo "$output_file"
+	[ "$status" -eq 0 ]
+	[ "$output" = "unset" ]
+}
+
 @test "requires a status topic when using status options" {
 	run mqtt_exec --status-up-payload online --status-down-payload offline \
 		--status-qos 1 --status-retain -t "$topic" -- /bin/true

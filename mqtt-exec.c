@@ -302,7 +302,10 @@ int main(int argc, char *argv[])
 			port = atoi(optarg);
 			break;
 		case 'P':
-			password = optarg;
+			password = strdup(optarg);
+			if (!password) {
+				return perror_ret("strdup");
+			}
 			break;
 		case 'q':
 			ud.qos = atoi(optarg);
@@ -438,8 +441,18 @@ int main(int argc, char *argv[])
 		goto cleanup;
 	}
 
-	if (username && !password)
+	if (!password) {
 		password = getenv("MQTT_EXEC_PASSWORD");
+
+		if (password) {
+			password = strdup(password);
+			if (!password) {
+				rc = perror_ret("strdup");
+				goto cleanup;
+			}
+			unsetenv("MQTT_EXEC_PASSWORD");
+		}
+	}
 
 	if (!username != !password) {
 		fprintf(stderr, "Need to set both username and password\n");
@@ -509,6 +522,7 @@ int main(int argc, char *argv[])
 	}
 
 cleanup:
+	free(password);
 	if (ud.ready_fd >= 0)
 		close(ud.ready_fd);
 	mosquitto_destroy(mosq);
