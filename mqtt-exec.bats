@@ -1,8 +1,17 @@
 #!/usr/bin/env bats
 
 MQTT_EXEC="$BATS_TEST_DIRNAME/mqtt-exec"
+MQTT_TEST="$BATS_TEST_DIRNAME/mqtt-test"
 MQTT_TEST_HOST="${MQTT_TEST_HOST:-127.0.0.1}"
 MQTT_TEST_PORT="${MQTT_TEST_PORT:-18884}"
+
+mqtt_pub() {
+	"$MQTT_TEST" pub -h "$MQTT_TEST_HOST" -p "$MQTT_TEST_PORT" "$@"
+}
+
+mqtt_sub() {
+	"$MQTT_TEST" sub -h "$MQTT_TEST_HOST" -p "$MQTT_TEST_PORT" "$@"
+}
 
 init_broker_paths() {
 	workdir="${BATS_FILE_TMPDIR:-${TMPDIR:-/tmp}}/mqtt-exec-test"
@@ -14,12 +23,11 @@ init_broker_paths() {
 wait_for_broker() {
 	init_broker_paths
 
-	for _ in 1 2 3 4 5 6 7 8 9 10; do
-		if mosquitto_pub -h "$MQTT_TEST_HOST" -p "$MQTT_TEST_PORT" \
-			-t _mqtt_exec_probe -m ready >/dev/null 2>&1; then
+	for _ in $(seq 0 100); do
+		if mqtt_pub -t _mqtt_exec_probe -m ready >/dev/null 2>&1; then
 			return 0
 		fi
-		sleep 0.2
+		sleep 0.1
 	done
 
 	[ -f "$logfile" ] && cat "$logfile" >&2
@@ -66,9 +74,14 @@ teardown_file() {
 
 setup() {
 	topic="mqtt-exec/test/${BATS_TEST_NUMBER}.$$"
-	output_file="$BATS_TEST_TMPDIR/payload"
+	handshake_topic="${topic}/ready"
+	handshake_payload="ready-${BATS_TEST_NUMBER}-$$"
+	output_file="$BATS_TEST_TMPDIR/payload.fifo"
+	ready_fifo="$BATS_TEST_TMPDIR/ready.fifo"
 	pid_file="$BATS_TEST_TMPDIR/mqtt-exec.pid"
 	status_topic=
+	rm -f "$output_file"
+	rm -f "$ready_fifo"
 }
 
 teardown() {
@@ -77,29 +90,62 @@ teardown() {
 		wait "$(cat "$pid_file")" 2>/dev/null || true
 	fi
 
-	mosquitto_pub -h "$MQTT_TEST_HOST" \
-		-p "$MQTT_TEST_PORT" \
-		-t "$topic" \
-		-n -r >/dev/null 2>&1 || true
+	mqtt_pub -t "$topic" -n -r >/dev/null 2>&1 || true
+	mqtt_pub -t "$handshake_topic" -n -r >/dev/null 2>&1 || true
 	if [ -n "$status_topic" ]; then
-		mosquitto_pub -h "$MQTT_TEST_HOST" \
-			-p "$MQTT_TEST_PORT" \
-			-t "$status_topic" \
-			-n -r >/dev/null 2>&1 || true
+		mqtt_pub -t "$status_topic" -n -r >/dev/null 2>&1 || true
 	fi
 }
 
-wait_for_file() {
+make_fifo() {
 	local path="$1"
-	local tries=15
+	rm -f "$path"
+	mkfifo "$path"
+}
 
-	while [ "$tries" -gt 0 ]; do
-		[ -f "$path" ] && return 0
-		sleep 0.2
-		tries=$((tries - 1))
-	done
+read_fifo() {
+	local path="$1"
+	local timeout_secs="${2:-5}"
 
-	return 1
+	timeout "$timeout_secs" cat "$path"
+}
+
+read_fifo_lines() {
+	local path="$1"
+	local count="$2"
+	local timeout_secs="${3:-5}"
+
+	timeout "$timeout_secs" sh -c '
+		path="$1"
+		count="$2"
+		exec 3<"$path"
+		while [ "$count" -gt 0 ]; do
+			IFS= read -r line <&3 || exit 1
+			printf "%s\n" "$line"
+			count=$((count - 1))
+		done
+	' sh "$path" "$count"
+}
+
+open_ready_channel() {
+	local path="$1"
+
+	make_fifo "$path"
+	exec {READY_FD}<>"$path"
+}
+
+read_ready_fd() {
+	local fd="$1"
+	local timeout_secs="${2:-5}"
+
+	timeout "$timeout_secs" bash -c 'IFS= read -r -u "$1" _' bash "$fd"
+}
+
+close_ready_fd() {
+	local fd="$1"
+
+	eval "exec ${fd}>&-"
+	eval "exec ${fd}<&-"
 }
 
 wait_for_process_exit() {
@@ -120,30 +166,49 @@ wait_for_process_exit() {
 start_single_message_subscriber() {
 	local topic="$1"
 	local output_path="$2"
+	local ready_fifo="${output_path}.ready"
+	local ready_fd
 
 	rm -f "$output_path"
-	mosquitto_sub -h "$MQTT_TEST_HOST" \
-		-p "$MQTT_TEST_PORT" \
-		-C 1 \
-		-t "$topic" >"$output_path" &
+	open_ready_channel "$ready_fifo"
+	ready_fd="$READY_FD"
+	mqtt_sub -C 1 -t "$topic" --ready-fd "$ready_fd" >"$output_path" &
 	SUB_PID=$!
+	read_ready_fd "$ready_fd" >/dev/null
+	close_ready_fd "$ready_fd"
+	rm -f "$ready_fifo"
 }
 
 assert_single_message() {
 	local sub_pid="$1"
 	local output_path="$2"
 	local expected="$3"
-	local tries="${4:-15}"
-	if ! wait_for_process_exit "$sub_pid" "$tries"; then
+	local output
+
+	wait "$sub_pid" 2>/dev/null || true
+	output="$(cat "$output_path")" || {
 		kill "$sub_pid" 2>/dev/null || true
 		wait "$sub_pid" 2>/dev/null || true
 		return 1
-	fi
-
-	wait "$sub_pid" 2>/dev/null || true
-	run cat "$output_path"
-	[ "$status" -eq 0 ]
+	}
 	[ "$output" = "$expected" ]
+}
+
+wait_for_mqtt_exec_subscription() {
+	local tries=20
+
+	make_fifo "$ready_fifo"
+	while [ "$tries" -gt 0 ]; do
+		mqtt_pub -t "$handshake_topic" -m "$handshake_payload" >/dev/null 2>&1 || true
+		if read_fifo "$ready_fifo" 1 >/dev/null 2>&1; then
+			rm -f "$ready_fifo"
+			return 0
+		fi
+		tries=$((tries - 1))
+	done
+
+	rm -f "$ready_fifo"
+	return 1
 }
 
 @test "--version prints the program version" {
@@ -210,119 +275,127 @@ assert_single_message() {
 }
 
 @test "verbose mode passes topic and payload" {
-	script="printf '%s\n%s' \"\${1-unset}\" \"\${2-unset}\" > '$output_file'"
+	make_fifo "$output_file"
+	script='
+if [ "$1" = "'"$handshake_topic"'" ] && [ "$2" = "'"$handshake_payload"'" ]; then
+	printf "\n" > "'"$ready_fifo"'"
+else
+	printf "%s\n%s" "${1-unset}" "${2-unset}" > "'"$output_file"'"
+fi'
 	"$MQTT_EXEC" -v \
 		-h "$MQTT_TEST_HOST" \
 		-p "$MQTT_TEST_PORT" \
 		-t "$topic" \
+		-t "$handshake_topic" \
 		-- /bin/sh -c "$script" /bin/sh &
 	echo $! > "$pid_file"
 
-	sleep 0.2
+	wait_for_mqtt_exec_subscription
 
-	run mosquitto_pub -h "$MQTT_TEST_HOST" \
-		-p "$MQTT_TEST_PORT" \
-		-t "$topic" \
-		-m "hello verbose"
+	run mqtt_pub -t "$topic" -m "hello verbose"
 	[ "$status" -eq 0 ]
 
-	wait_for_file "$output_file"
-
-	run cat "$output_file"
+	run read_fifo "$output_file"
 	[ "$status" -eq 0 ]
 	[ "$output" = "$(printf '%s\n%s' "$topic" "hello verbose")" ]
 }
 
 @test "verbose mode executes for an empty payload and passes the topic" {
-	script="printf '%s\n%s' \"\${1-unset}\" \"\${2-unset}\" > '$output_file'"
+	make_fifo "$output_file"
+	script='
+if [ "$1" = "'"$handshake_topic"'" ] && [ "$2" = "'"$handshake_payload"'" ]; then
+	printf "\n" > "'"$ready_fifo"'"
+else
+	printf "%s\n%s" "${1-unset}" "${2-unset}" > "'"$output_file"'"
+fi'
 	"$MQTT_EXEC" -v \
 		-h "$MQTT_TEST_HOST" \
 		-p "$MQTT_TEST_PORT" \
 		-t "$topic" \
+		-t "$handshake_topic" \
 		-- /bin/sh -c "$script" /bin/sh &
 	echo $! > "$pid_file"
 
-	sleep 0.2
+	wait_for_mqtt_exec_subscription
 
-	run mosquitto_pub -h "$MQTT_TEST_HOST" \
-		-p "$MQTT_TEST_PORT" \
-		-t "$topic" \
-		-n
+	run mqtt_pub -t "$topic" -n
 	[ "$status" -eq 0 ]
 
-	wait_for_file "$output_file"
-
-	run cat "$output_file"
+	run read_fifo "$output_file"
 	[ "$status" -eq 0 ]
 	[ "$output" = "$(printf '%s\nunset' "$topic")" ]
 }
 
 @test "executes a command for a live message from the broker" {
-	script="printf '%s' \"\$1\" > '$output_file'"
+	make_fifo "$output_file"
+	script='
+if [ "$1" = "'"$handshake_payload"'" ]; then
+	printf "\n" > "'"$ready_fifo"'"
+else
+	printf "%s" "$1" > "'"$output_file"'"
+fi'
 	"$MQTT_EXEC" -h "$MQTT_TEST_HOST" \
 		-p "$MQTT_TEST_PORT" \
 		-t "$topic" \
+		-t "$handshake_topic" \
 		-- /bin/sh -c "$script" /bin/sh &
 	echo $! > "$pid_file"
 
-	sleep 0.2
+	wait_for_mqtt_exec_subscription
 
-	run mosquitto_pub -h "$MQTT_TEST_HOST" \
-		-p "$MQTT_TEST_PORT" \
-		-t "$topic" \
-		-m "live message"
+	run mqtt_pub -t "$topic" -m "live message"
 	[ "$status" -eq 0 ]
 
-	wait_for_file "$output_file"
-
-	run cat "$output_file"
+	run read_fifo "$output_file"
 	[ "$status" -eq 0 ]
 	[ "$output" = "live message" ]
 }
 
 @test "subscribes to multiple topics" {
 	topic2="${topic}/second"
-	script="printf '%s\n' \"\$1\" >> '$output_file'"
+	collector_fifo="$BATS_TEST_TMPDIR/collector.fifo"
+	output_path="$BATS_TEST_TMPDIR/multi-topic.out"
+	make_fifo "$collector_fifo"
+	rm -f "$output_path"
+	exec 8<>"$collector_fifo"
+	read_fifo_lines "$collector_fifo" 2 >"$output_path" &
+	relay_pid=$!
+	script='
+if [ "$1" = "'"$handshake_payload"'" ]; then
+	printf "\n" > "'"$ready_fifo"'"
+else
+	printf "%s\n" "$1" > "'"$collector_fifo"'"
+fi'
 	"$MQTT_EXEC" -h "$MQTT_TEST_HOST" \
 		-p "$MQTT_TEST_PORT" \
 		-t "$topic" \
 		-t "$topic2" \
+		-t "$handshake_topic" \
 		-- /bin/sh -c "$script" /bin/sh &
 	echo $! > "$pid_file"
 
-	sleep 0.2
+	wait_for_mqtt_exec_subscription
 
-	run mosquitto_pub -h "$MQTT_TEST_HOST" \
-		-p "$MQTT_TEST_PORT" \
-		-t "$topic" \
-		-m "first topic"
+	run mqtt_pub -t "$topic" -m "first topic"
 	[ "$status" -eq 0 ]
 
-	run mosquitto_pub -h "$MQTT_TEST_HOST" \
-		-p "$MQTT_TEST_PORT" \
-		-t "$topic2" \
-		-m "second topic"
+	run mqtt_pub -t "$topic2" -m "second topic"
 	[ "$status" -eq 0 ]
 
-	for _ in 1 2 3 4 5 6 7 8 9 10; do
-		if [ -f "$output_file" ] && [ "$(wc -l < "$output_file")" -eq 2 ]; then
-			break
-		fi
-		sleep 0.2
-	done
+	wait "$relay_pid"
+	exec 8>&-
+	exec 8<&-
 
-	run sort "$output_file"
+	run sort "$output_path"
 	[ "$status" -eq 0 ]
 	[ "$output" = "$(printf '%s\n%s' "first topic" "second topic")" ]
 }
 
 @test "executes a command for a retained message from the broker" {
-	run mosquitto_pub -h "$MQTT_TEST_HOST" \
-		-p "$MQTT_TEST_PORT" \
-		-t "$topic" \
-		-m "hello world" -r
+	run mqtt_pub -t "$topic" -m "hello world" -r
 	[ "$status" -eq 0 ]
 
+	make_fifo "$output_file"
 	script="printf '%s' \"\$1\" > '$output_file'"
 	"$MQTT_EXEC" -h "$MQTT_TEST_HOST" \
 		-p "$MQTT_TEST_PORT" \
@@ -330,9 +403,7 @@ assert_single_message() {
 		-- /bin/sh -c "$script" /bin/sh &
 	echo $! > "$pid_file"
 
-	wait_for_file "$output_file"
-
-	run cat "$output_file"
+	run read_fifo "$output_file"
 	[ "$status" -eq 0 ]
 	[ "$output" = "hello world" ]
 }
@@ -340,7 +411,6 @@ assert_single_message() {
 @test "publishes the configured status message after reconnect" {
 	status_topic="${topic}/state"
 	first_status="$BATS_TEST_TMPDIR/status-first.$$"
-	second_status="$BATS_TEST_TMPDIR/status-second.$$"
 	start_single_message_subscriber "$status_topic" "$first_status"
 	first_sub_pid="$SUB_PID"
 
@@ -355,13 +425,12 @@ assert_single_message() {
 
 	assert_single_message "$first_sub_pid" "$first_status" "online"
 
-	start_single_message_subscriber "$status_topic" "$second_status"
-	second_sub_pid="$SUB_PID"
-
 	stop_broker
 	start_broker
 
-	assert_single_message "$second_sub_pid" "$second_status" "online" 50
+	run mqtt_sub -W 10 -C 1 -t "$status_topic"
+	[ "$status" -eq 0 ]
+	[ "$output" = "online" ]
 }
 
 @test "publishes an empty up status when only status topic is set" {
@@ -400,7 +469,6 @@ assert_single_message() {
 
 	start_single_message_subscriber "$status_topic" "$down_path"
 	down_sub_pid="$SUB_PID"
-	sleep 0.2
 
 	kill -TERM "$(cat "$pid_file")"
 	wait_for_process_exit "$(cat "$pid_file")"
@@ -422,13 +490,13 @@ assert_single_message() {
 		-- /bin/true &
 	echo $! > "$pid_file"
 
-	mosquitto_sub -h "$MQTT_TEST_HOST" \
-		-p "$MQTT_TEST_PORT" \
-		-C 1 \
-		-t "$will_topic" >"$will_path" &
+	open_ready_channel "$will_path.ready"
+	ready_fd="$READY_FD"
+	mqtt_sub -C 1 -t "$will_topic" --ready-fd "$ready_fd" >"$will_path" &
 	sub_pid=$!
-
-	sleep 0.2
+	read_ready_fd "$ready_fd" >/dev/null
+	close_ready_fd "$ready_fd"
+	rm -f "$will_path.ready"
 
 	kill -KILL "$(cat "$pid_file")"
 	wait "$(cat "$pid_file")" 2>/dev/null || true
@@ -461,11 +529,13 @@ assert_single_message() {
 
 	assert_single_message "$up_sub_pid" "$up_path" "online"
 
-	mosquitto_sub -h "$MQTT_TEST_HOST" \
-		-p "$MQTT_TEST_PORT" \
-		-C 1 \
-		-t "$will_topic" >"$will_path" &
+	open_ready_channel "$will_path.ready"
+	ready_fd="$READY_FD"
+	mqtt_sub -C 1 -t "$will_topic" --ready-fd "$ready_fd" >"$will_path" &
 	sub_pid=$!
+	read_ready_fd "$ready_fd" >/dev/null
+	close_ready_fd "$ready_fd"
+	rm -f "$will_path.ready"
 
 	kill -KILL "$(cat "$pid_file")"
 	wait "$(cat "$pid_file")" 2>/dev/null || true
